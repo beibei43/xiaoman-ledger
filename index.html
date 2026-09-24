@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#3FA796" />
+  <title>小满 · 个人财务工作台</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- 左侧固定导航 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand" id="brand">
+        <div class="brand-avatar" id="brandAvatar" data-action="upload-avatar" title="点击上传头像">🙂</div>
+        <div class="brand-text">
+          <div class="brand-name" id="brandName" data-action="edit-name" title="点击修改名称">beibei的账本</div>
+          <div class="brand-sub" id="brandMotto" data-action="edit-motto" title="点击修改签名">慢慢变富</div>
+        </div>
+      </div>
+      <input type="file" id="avatarInput" accept="image/*" hidden>
+      <nav class="nav" id="nav">
+        <button class="nav-item active" data-page="home"><span class="nav-ico">🏠</span><span>首页</span></button>
+        <button class="nav-item" data-page="deposit"><span class="nav-ico">🏦</span><span>存钱罐</span></button>
+        <button class="nav-item" data-page="flow"><span class="nav-ico">💧</span><span>流动资金</span></button>
+        <button class="nav-item" data-page="budget"><span class="nav-ico">🎯</span><span>年度预算</span></button>
+        <button class="nav-item" data-page="invest"><span class="nav-ico">📈</span><span>投资</span></button>
+        <button class="nav-item" data-page="insurance"><span class="nav-ico">🛡️</span><span>保险记录</span></button>
+      </nav>
+      <div class="sidebar-foot">
+        <button class="nav-item slim" data-action="open-history"><span class="nav-ico">📅</span><span>历史记录</span></button>
+        <button class="nav-item slim" data-action="open-settings"><span class="nav-ico">⚙️</span><span>设置</span></button>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <!-- 右侧内容区 -->
+    <main class="main">
+      <header class="topbar">
+        <button class="menu-btn" id="menuBtn" aria-label="菜单">☰</button>
+        <div class="topbar-title" id="topTitle">首页</div>
+        <div class="topbar-actions" id="topActions"></div>
+      </header>
+      <div class="content" id="content">
+        <section class="page active" id="page-home"></section>
+        <section class="page" id="page-deposit"></section>
+        <section class="page" id="page-flow"></section>
+        <section class="page" id="page-budget"></section>
+        <section class="page" id="page-invest"></section>
+        <section class="page" id="page-insurance"></section>
+      </div>
+    </main>
+  </div>
+
+  <!-- 模态框容器 -->
+  <div id="modal-root"></div>
+  <!-- 提示容器 -->
+  <div id="toast-root"></div>
+
+  <script src="data.js"></script>
+  <script src="calc.js"></script>
+  <script src="charts.js"></script>
+  <script src="ui.js"></script>
+</body>
+</html>
