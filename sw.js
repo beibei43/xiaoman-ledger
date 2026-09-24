@@ -1,6 +1,6 @@
 // 简易 Service Worker：缓存核心静态资源，实现离线可用（PWA）
 // 采用 network-first：联网时始终返回最新文件，断网才回退缓存，避免旧 JS 被长期缓存导致“点了没反应”
-const CACHE = 'pfw-v4';
+const CACHE = 'pfw-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -11,6 +11,14 @@ const ASSETS = [
   './ui.js',
   './manifest.webmanifest'
 ];
+
+// 核心资源集合：只有这些请求失败/404 才算“离线兜底”并弹黄条。
+// favicon.ico 等浏览器附加请求即使 404（GitHub Pages 上没有）也不报警，避免误报。
+const CORE_URLS = new Set(ASSETS.map(function (a) { return new URL(a, self.registration.scope).href; }));
+function isCore(req) {
+  if (req.mode === 'navigate') return true;
+  return CORE_URLS.has(req.url);
+}
 
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -43,8 +51,11 @@ self.addEventListener('fetch', event => {
         if (!fresh) {
           return caches.match(req)
             .then(c => {
-              if (c) { notifyStale(); return staleMark(c); }
-              return caches.match('./index.html').then(h => (h ? (notifyStale(), staleMark(h)) : res));
+              if (c) return isCore(req) ? (notifyStale(), staleMark(c)) : c;
+              if (isCore(req)) {
+                return caches.match('./index.html').then(h => (h ? (notifyStale(), staleMark(h)) : res));
+              }
+              return res; // 非核心请求（如 favicon）404：原样放行，不报警
             });
         }
         if (res.status === 200 && (res.type === 'basic' || res.type === 'cors')) {
@@ -54,8 +65,13 @@ self.addEventListener('fetch', event => {
         return res;
       })
       .catch(() => {
-        notifyStale();
-        return caches.match(req).then(c => caches.match('./index.html').then(h => staleMark(c || h)));
+        return caches.match(req).then(c => {
+          if (c) return isCore(req) ? (notifyStale(), staleMark(c)) : c;
+          return caches.match('./index.html').then(h => {
+            if (h && isCore(req)) { notifyStale(); return staleMark(h); }
+            return new Response('', { status: 504, statusText: 'Offline' });
+          });
+        });
       })
   );
 });
