@@ -724,6 +724,25 @@ input, select, textarea { font-family: inherit; font-size: 15px; }
 .remind-acts .btn { white-space: nowrap; }
 
 /* 保险：附件（图片 / 文件） */
+
+/* 保险月历：全年逐月预估保险费 */
+.ins-forecast { margin: 14px 0 4px; }
+.ins-fc-summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+.ins-fc-bars { display: flex; align-items: flex-end; justify-content: space-between; gap: 3px; height: 132px; padding: 6px 2px 0; }
+.ins-fc-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; cursor: pointer; border-radius: 8px; padding: 2px 0; transition: background .15s; }
+.ins-fc-col:hover, .ins-fc-col:active { background: rgba(0,0,0,.04); }
+.ins-fc-val { font-size: 9.5px; font-weight: 700; color: var(--ink); margin-bottom: 3px; white-space: nowrap; transform: scale(.92); }
+.ins-fc-bar { width: 70%; max-width: 26px; min-height: 4px; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, #6aa6ff, #3f7fe0); }
+.ins-fc-col.zero .ins-fc-bar { background: var(--line); }
+.ins-fc-col.cur .ins-fc-bar { background: linear-gradient(180deg, #ffb45e, #f5922b); }
+.ins-fc-col.cur { background: rgba(245,146,43,.10); }
+.ins-fc-m { font-size: 10.5px; color: var(--ink-soft); margin-top: 5px; }
+.ins-fc-col.cur .ins-fc-m { color: #f5922b; font-weight: 700; }
+.ins-fc-hint { font-size: 11px; color: var(--ink-soft); line-height: 1.5; margin-top: 8px; opacity: .9; }
+.ins-fc-month-total { font-size: 14px; margin-bottom: 10px; color: var(--ink); }
+.ins-fc-month-total b { color: #f5922b; font-size: 18px; }
+.ins-fc-col.zero .ins-fc-val { display: none; }
+
 .att-box { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; }
 .att-item { position: relative; width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: #f3f0ea; border: 1px solid var(--line); }
 .att-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }

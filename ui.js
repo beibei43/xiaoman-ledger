@@ -2242,6 +2242,9 @@
       ]) : null
     ]));
 
+    // ⭐ 保险月历：全年逐月预估保险费（全家）
+    sec.appendChild(insuranceForecastSection(null));
+
     // 家庭成员网格
     sec.appendChild(h('div', { class: 'section-label' }, ['👨‍👩‍👧‍👦 家庭成员（点击查看 / 新增保险）']));
     var grid = h('div', { class: 'member-grid' });
@@ -2275,6 +2278,9 @@
       ])
     ]));
 
+    // ⭐ 保险月历：该成员全年逐月预估保险费
+    sec.appendChild(insuranceForecastSection(memberId));
+
     sec.appendChild(h('div', { class: 'section-label', style: { display: 'flex', alignItems: 'center' } }, [
       h('span', {}, ['保险明细']), spacer(),
       h('button', { class: 'btn btn-sm btn-primary', 'data-action': 'add-insurance' }, '＋ 新增保险')
@@ -2285,6 +2291,70 @@
     } else {
       list.forEach(function (ins) { sec.appendChild(insuranceCard(ins, m)); });
     }
+  }
+
+  // 紧凑金额（用于月历柱顶）：≥1万显示“x.x万”，否则取整
+  function moneyShort(n) {
+    n = Number(n) || 0;
+    if (n >= 10000) {
+      var w = n / 10000;
+      return '¥' + (w % 1 === 0 ? w.toFixed(0) : w.toFixed(1)) + '万';
+    }
+    return '¥' + Math.round(n);
+  }
+
+  // ⭐ 保险月历：全年逐月预估保险费（可指定 memberId 只看某人）
+  function insuranceForecastSection(memberId) {
+    var year = D.viewYear;
+    var fc = C.insuranceMonthlyForecast(D, year, memberId);
+    var now = new Date();
+    var curMonth = (now.getFullYear() === year) ? (now.getMonth() + 1) : 0;
+    var max = Math.max(fc.peak, 1);
+    var bars = fc.months.map(function (r) {
+      var isCur = (r.month === curMonth);
+      var hgt = r.total > 0 ? Math.max(8, Math.round((r.total / max) * 100)) : 4;
+      return h('div', {
+        class: 'ins-fc-col' + (isCur ? ' cur' : '') + (r.total <= 0 ? ' zero' : ''),
+        'data-action': 'ins-month-detail', 'data-month': r.month,
+        title: r.month + '月 预估 ' + money(r.total) + '（点击查看明细）'
+      }, [
+        r.total > 0 ? h('div', { class: 'ins-fc-val' }, moneyShort(r.total)) : null,
+        h('div', { class: 'ins-fc-bar', style: { height: hgt + 'px' } }, []),
+        h('div', { class: 'ins-fc-m' }, r.month + '月')
+      ]);
+    });
+    return h('div', { class: 'ins-forecast' }, [
+      h('div', { class: 'section-label' }, ['📅 ' + year + ' 年每月预估保险费']),
+      h('div', { class: 'ins-fc-summary' }, [
+        h('span', { class: 'chip' }, '全年合计 ' + money(fc.total)),
+        h('span', { class: 'chip' }, '月均 ' + money(fc.monthlyAvg)),
+        fc.peakMonth ? h('span', { class: 'chip red' }, '峰值 ' + fc.peakMonth + '月 ' + money(fc.peak)) : null
+      ]),
+      h('div', { class: 'ins-fc-bars' }, bars),
+      h('div', { class: 'ins-fc-hint' }, '根据每张保单的交费方式（年交 / 半年交 / 季交 / 月交 / 趸交）与提醒日推算；点某月看明细。仅计入提醒生效年份内的保单。')
+    ]);
+  }
+
+  // 某月预估保险费明细弹窗
+  function insuranceMonthDetail(month) {
+    var year = D.viewYear;
+    var fc = C.insuranceMonthlyForecast(D, year, null);
+    var r = fc.months[month - 1];
+    var rows = r.items.slice().sort(function (a, b) { return b.amount - a.amount; }).map(function (it) {
+      var m = memberById(it.memberId);
+      return h('div', { class: 'li tappable', 'data-action': 'ins-detail', 'data-id': it.id }, [
+        h('div', { class: 'li-left' }, [
+          h('div', { class: 'li-title' }, [h('span', { class: 'chip' }, it.type), ' ', it.name]),
+          h('div', { class: 'li-sub' }, (m ? m.name + ' · ' : '') + (it.freq || '年交'))
+        ]),
+        h('div', { class: 'li-right' }, [h('div', { class: 'li-amount' }, money(it.amount)), h('div', { class: 'li-sub' }, month + '月支出')])
+      ]);
+    });
+    if (!rows.length) rows = [h('div', { class: 'empty-sm' }, '该月没有预估保险支出')];
+    openModal(year + ' 年 ' + month + '月 · 预估保险费 ' + money(r.total), h('div', {}, [
+      h('div', { class: 'ins-fc-month-total' }, ['当月合计 ', h('b', {}, money(r.total))]),
+      h('div', { class: 'list' }, rows)
+    ]));
   }
 
   function insuranceCard(ins, m) {
@@ -3180,6 +3250,7 @@
       case 'ins-edit-payment': insurancePaymentForm(el.getAttribute('data-ins'), el.getAttribute('data-pay')); break;
       case 'ins-add-claim': claimForm(el.getAttribute('data-ins'), null); break;
       case 'ins-edit-claim': claimForm(el.getAttribute('data-ins'), el.getAttribute('data-claim')); break;
+      case 'ins-month-detail': insuranceMonthDetail(Number(el.getAttribute('data-month'))); break;
       case 'dismiss-install-hint': { var hn = q('.install-hint'); if (hn) hn.parentNode.removeChild(hn); break; }
       case 'backup-now': { exportJSON(); break; }
       case 'backup-later': { setBackupSnooze(); removeBackupHint(); break; }

@@ -305,6 +305,74 @@
     return sum((data.insurances || []).filter(function (x) { return x.memberId === memberId; }), function (x) { return x.amount; });
   }
 
+  /* ---------- 保险：全年逐月预估支出（保险月历） ----------
+   * 根据每张保单的交费方式(payFreq)与提醒日(remindMd：每年 MM-DD)，
+   * 推算“查看年份”内每个月要预留的保险费，避免某月资金突然不足。
+   * 规则：
+   *  - 年交 / 趸交：在提醒月一次性支出全额年保费
+   *      其中趸交仅在生效起始年(首年)的提醒月支出
+   *  - 半年交：提醒月 + 提醒月+6 月，各半额
+   *  - 季交：提醒月、+3、+6、+9 月，各 1/4
+   *  - 月交：每月（落在保障期限内的）各 1/12
+   * 仅当查看年份落在提醒生效年范围 [remindFromYear, remindToYear] 才计入；
+   * 月/季/半年交进一步受保障期限 [payStart, payEnd]（按月）约束。
+   */
+  function extractMd(payDate) {
+    var m = (payDate || '').match(/(\d{1,2})月(\d{1,2})日/);
+    if (!m) return null;
+    var a = m[1].length === 1 ? '0' + m[1] : m[1];
+    var b = m[2].length === 1 ? '0' + m[2] : m[2];
+    return a + '-' + b;
+  }
+  function inCoverageYm(year, month, ps, pe) {
+    var ym = year * 12 + (month - 1);
+    var sYm = ps.getFullYear() * 12 + ps.getMonth();
+    var eYm = pe.getFullYear() * 12 + pe.getMonth();
+    return ym >= sYm && ym <= eYm;
+  }
+  function insurancePaymentMonthsInYear(ins, year) {
+    var freq = ins.payFreq || '年交';
+    var md = ins.remindMd || extractMd(ins.payDate);
+    var rMonth = md ? Number(md.substring(0, 2)) : null;
+    var fromY = (ins.remindFromYear != null) ? ins.remindFromYear : year;
+    var toY = (ins.remindToYear != null) ? ins.remindToYear : year;
+    var pay = Number(ins.amount) || 0;
+    if (year < fromY || year > toY || !rMonth) return [];
+    var out = [];
+    if (freq === '年交' || freq === '年缴') {
+      out.push({ month: rMonth, amount: pay });
+    } else if (freq === '趸交' || freq === '趸交（一次性）') {
+      if (year === fromY) out.push({ month: rMonth, amount: pay });
+    } else if (freq === '半年交' || freq === '半年缴') {
+      [0, 6].forEach(function (off) { var m = rMonth + off; if (m <= 12) out.push({ month: m, amount: pay / 2 }); });
+    } else if (freq === '季交' || freq === '季缴') {
+      [0, 3, 6, 9].forEach(function (off) { var m = rMonth + off; if (m <= 12) out.push({ month: m, amount: pay / 4 }); });
+    } else if (freq === '月交' || freq === '月缴') {
+      var ps = ins.payStart ? D.parseYmd(ins.payStart) : null;
+      var pe = ins.payEnd ? D.parseYmd(ins.payEnd) : null;
+      for (var m = 1; m <= 12; m++) {
+        if (ps && pe && !inCoverageYm(year, m, ps, pe)) continue;
+        out.push({ month: m, amount: pay / 12 });
+      }
+    }
+    return out;
+  }
+  function insuranceMonthlyForecast(data, year, memberId) {
+    var arr = [];
+    for (var m = 1; m <= 12; m++) arr.push({ month: m, total: 0, items: [] });
+    (data.insurances || []).forEach(function (ins) {
+      if (memberId && ins.memberId !== memberId) return;
+      insurancePaymentMonthsInYear(ins, year).forEach(function (pm) {
+        var idx = pm.month - 1;
+        arr[idx].total += pm.amount;
+        arr[idx].items.push({ id: ins.id, name: ins.name, type: ins.type, memberId: ins.memberId, amount: pm.amount, freq: ins.payFreq });
+      });
+    });
+    var total = 0, peak = 0, peakMonth = 0;
+    arr.forEach(function (r) { total += r.total; if (r.total > peak) { peak = r.total; peakMonth = r.month; } });
+    return { months: arr, total: total, monthlyAvg: total / 12, peak: peak, peakMonth: peakMonth };
+  }
+
   /* ---------- 近 7 天消费趋势（大额 + 还款，不含垫付） ---------- */
   function last7DaysTrend(data, refDate) {
     var ref = refDate ? D.parseYmd(refDate) : new Date();
@@ -499,6 +567,8 @@
     insuranceMonthlyAvg: insuranceMonthlyAvg,
     insuranceCount: insuranceCount,
     insuranceAnnualByMember: insuranceAnnualByMember,
+    insuranceMonthlyForecast: insuranceMonthlyForecast,
+    insurancePaymentMonthsInYear: insurancePaymentMonthsInYear,
     fetchSHIndex: fetchSHIndex,
     fetchGlobalIndices: fetchGlobalIndices,
     fetchFundInfo: fetchFundInfo
