@@ -1205,7 +1205,7 @@
   function parseYM(s) { var p = String(s).split('-'); return { y: Number(p[0]), m: Number(p[1]) }; }
   function ymSelect(defYear, defMonth) {
     var cy = new Date().getFullYear();
-    var yOpts = []; for (var y = cy - 5; y <= cy + 10; y++) yOpts.push({ value: String(y), label: String(y) + '年' });
+    var yOpts = []; for (var y = cy - 10; y <= cy + 50; y++) yOpts.push({ value: String(y), label: String(y) + '年' });
     var mOpts = []; for (var i = 1; i <= 12; i++) mOpts.push({ value: P.pad2(i), label: i + '月' });
     var ys = select({ value: String(defYear) }, yOpts);
     var ms = select({ value: P.pad2(defMonth) }, mOpts);
@@ -1613,59 +1613,71 @@
     var b = D.budgets.filter(function (x) { return x.id === id; })[0];
     if (!b) return;
     var y = D.viewYear;
-    var d = C.budgetYearData(b, y);
-    var statusChip = budgetStatusChip(d);
-    var sched = d.scheduleAll;          // 全部期（含其他年）
-    var per = d.per;
+    // 关键：直接操作真实的 b.schedule（budgetSchedule 返回的是副本，改副本不会持久化）
+    if (!Array.isArray(b.schedule)) b.schedule = C.budgetSchedule(b);
 
-    var payBox = h('div', { class: 'detail-payments' });
-    function renderPeriods() {
-      payBox.innerHTML = '';
-      if (!sched.length) { payBox.appendChild(h('div', { class: 'empty-sm' }, '暂无付款计划')); return; }
-      sched.forEach(function (p, i) {
-        var inY = p.expected.substring(0, 4) === String(y);
-        var chk = h('input', { type: 'checkbox' }); chk.checked = !!p.paid;
-        var dt = input({ type: 'date', value: p.paidDate || P.todayYmd() }); dt.disabled = !chk.checked;
-        chk.onchange = function () { p.paid = chk.checked; if (p.paid) { p.paidDate = dt.value; } else { p.paidDate = ''; p.paidBy = null; } save(); renderPeriods(); };
-        dt.onchange = function () { p.paidDate = dt.value; save(); };
-        payBox.appendChild(h('div', { class: 'list-item' + (inY ? '' : ' muted'), style: { alignItems: 'center' } }, [
-          h('div', { class: 'li-main' }, [
-            h('div', { class: 'li-title' }, [p.expected + ' 预计', inY ? null : h('span', { class: 'chip gray', style: { marginLeft: 6 } }, '其他年')]),
-            h('div', { class: 'li-sub' }, '本期金额 ' + money(per) + (p.paid ? (' · 已付 ' + (p.paidDate || '')) : ' · 待付'))
-          ]),
-          h('div', { class: 'li-right', style: { display: 'flex', alignItems: 'center', gap: 6 } }, [chk, dt])
-        ]));
-      });
+    function render() {
+      var d = C.budgetYearData(b, y);
+      var statusChip = budgetStatusChip(d);
+      var sched = b.schedule;
+      var per = d.per;
+
+      var payBox = h('div', { class: 'detail-payments' });
+      function renderPeriods() {
+        payBox.innerHTML = '';
+        if (!sched.length) { payBox.appendChild(h('div', { class: 'empty-sm' }, '暂无付款计划')); return; }
+        sched.forEach(function (p) {
+          var inY = p.expected.substring(0, 4) === String(y);
+          var chk = h('input', { type: 'checkbox' }); chk.checked = !!p.paid;
+          var dt = input({ type: 'date', value: p.paidDate || P.todayYmd() }); dt.disabled = !chk.checked;
+          chk.onchange = function () {
+            p.paid = chk.checked;
+            if (p.paid) { p.paidDate = dt.value; } else { p.paidDate = ''; p.paidBy = null; }
+            dt.disabled = !p.paid;
+            save(); render();                         // 刷新本弹窗（含“已付”统计/状态）
+            if (typeof renderBudget === 'function') renderBudget(); // 同步底层预算首页
+          };
+          dt.onchange = function () { p.paidDate = dt.value; save(); renderPeriods(); if (typeof renderBudget === 'function') renderBudget(); };
+          payBox.appendChild(h('div', { class: 'list-item' + (inY ? '' : ' muted'), style: { alignItems: 'center' } }, [
+            h('div', { class: 'li-main' }, [
+              h('div', { class: 'li-title' }, [p.expected + ' 预计', inY ? null : h('span', { class: 'chip gray', style: { marginLeft: 6 } }, '其他年')]),
+              h('div', { class: 'li-sub' }, '本期金额 ' + money(per) + (p.paid ? (' · 已付 ' + (p.paidDate || '')) : ' · 待付'))
+            ]),
+            h('div', { class: 'li-right', style: { display: 'flex', alignItems: 'center', gap: 6 } }, [chk, dt])
+          ]));
+        });
+      }
+      renderPeriods();
+
+      var body = h('div', {}, [
+        h('div', { class: 'budget-detail-head' }, [
+          h('div', { class: 'budget-detail-name' }, b.name),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
+            statusChip,
+            h('button', { class: 'btn btn-sm', onclick: function () { closeModal(); budgetForm(id); } }, '✎ 编辑')
+          ])
+        ]),
+        h('div', { class: 'budget-detail-period' }, '支付方式 ' + payMethodLabel(d.payMethod) + (b.categoryId ? ' · ' + catName(b.categoryId) : '')),
+        h('div', { class: 'budget-detail-stats' }, [
+          bdStat('预算总额（录入）', d.fullTotal),
+          bdStat('每期金额', per),
+          bdStat('本年预计', d.total),
+          bdStat('本年已付', d.paidCash),
+          bdStat(d.paid ? '本年状态' : '本年待付', d.paid ? '已全部付' : money(d.remainToPay), !d.paid),
+          bdStat('期数', d.periodCount + ' 期（已付 ' + d.paidPeriods + '）')
+        ]),
+        h('div', { class: 'section-label', style: { marginTop: 10 } }, ['💸 付款计划（勾选已付并填日期）']),
+        payBox,
+        b.note ? h('div', { class: 'budget-detail-note' }, b.note) : null
+      ]);
+      openModal('预算详情', body, [
+        h('button', { class: 'btn', onclick: closeModal }, '关闭'),
+        h('button', { class: 'btn btn-ghost', onclick: function () { closeModal(); copyBudgetToNewYear(id); } }, '📋 复制到新年度'),
+        h('button', { class: 'btn btn-danger', onclick: function () { closeModal(); delBudget(id); } }, '删除'),
+        h('button', { class: 'btn btn-primary', onclick: function () { closeModal(); budgetForm(id); } }, '编辑')
+      ]);
     }
-    renderPeriods();
-
-    var body = h('div', {}, [
-      h('div', { class: 'budget-detail-head' }, [
-        h('div', { class: 'budget-detail-name' }, b.name),
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
-          statusChip,
-          h('button', { class: 'btn btn-sm', onclick: function () { closeModal(); budgetForm(id); } }, '✎ 编辑')
-        ])
-      ]),
-      h('div', { class: 'budget-detail-period' }, '支付方式 ' + payMethodLabel(d.payMethod) + (b.categoryId ? ' · ' + catName(b.categoryId) : '')),
-      h('div', { class: 'budget-detail-stats' }, [
-        bdStat('预算总额（录入）', d.fullTotal),
-        bdStat('每期金额', per),
-        bdStat('本年预计', d.total),
-        bdStat('本年已付', d.paidCash),
-        bdStat(d.paid ? '本年状态' : '本年待付', d.paid ? '已全部付' : money(d.remainToPay), !d.paid),
-        bdStat('期数', d.periodCount + ' 期（已付 ' + d.paidPeriods + '）')
-      ]),
-      h('div', { class: 'section-label', style: { marginTop: 10 } }, ['💸 付款计划（勾选已付并填日期）']),
-      payBox,
-      b.note ? h('div', { class: 'budget-detail-note' }, b.note) : null
-    ]);
-    openModal('预算详情', body, [
-      h('button', { class: 'btn', onclick: closeModal }, '关闭'),
-      h('button', { class: 'btn btn-ghost', onclick: function () { closeModal(); copyBudgetToNewYear(id); } }, '📋 复制到新年度'),
-      h('button', { class: 'btn btn-danger', onclick: function () { closeModal(); delBudget(id); } }, '删除'),
-      h('button', { class: 'btn btn-primary', onclick: function () { closeModal(); budgetForm(id); } }, '编辑')
-    ]);
+    render();
   }
 
   function budgetForm(id) {
@@ -1740,7 +1752,7 @@
       }
       var chk = h('input', { type: 'checkbox' }); chk.checked = !!p.paid;
       var dt = input({ type: 'date', value: p.paidDate || P.todayYmd() }); dt.disabled = !chk.checked;
-      chk.onchange = function () { p.paid = chk.checked; if (p.paid) p.paidDate = dt.value; else { p.paidDate = ''; p.paidBy = null; } syncPaidCount(); };
+      chk.onchange = function () { p.paid = chk.checked; if (p.paid) p.paidDate = dt.value; else { p.paidDate = ''; p.paidBy = null; } dt.disabled = !p.paid; syncPaidCount(); };
       dt.onchange = function () { p.paidDate = dt.value; };
       var kids = leftKids.concat([field('已付', chk), field('实付日期', dt)]);
       if (methodSel.value === 'irregular') {
