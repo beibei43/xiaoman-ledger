@@ -220,25 +220,12 @@
         { id: crHuabei, name: '花呗', remaining: 2000 }
       ],
       budgets: [
-        { id: uid('b'), name: '哥哥英语课', categoryId: 'cat_ge', total: 10000,
-          amortStart: y + '-03-01', amortEnd: (y + 1) + '-03-01', note: '外教课（全年）',
-          defaultMethod: '转账',
-          payments: [
-            { id: uid('p'), date: y + '-03-15', amount: 5000, method: '转账' },
-            { id: uid('p'), date: y + '-09-15', amount: 5000, method: '转账' }
-          ] },
-        { id: uid('b'), name: '羽毛球班', categoryId: 'cat_di', total: 10000,
-          amortStart: y + '-01-01', amortEnd: y + '-12-31', note: '全年分多期',
-          defaultMethod: '现金',
-          payments: [
-            { id: uid('p'), date: y + '-02-10', amount: 2000, method: '现金' }
-          ] },
-        { id: uid('b'), name: '年度护肤', categoryId: 'cat_fam', total: 3600,
-          amortStart: y + '-01-01', amortEnd: y + '-12-31', note: '',
-          defaultMethod: '转账',
-          payments: [
-            { id: uid('p'), date: y + '-03-01', amount: 1800, method: '转账' }
-          ] }
+        { id: uid('b'), name: '哥哥英语课', categoryId: 'cat_ge', total: 10000, year: y,
+          expectedDate: y + '-03-01', paid: true, paidDate: y + '-03-15', note: '外教课（全年）' },
+        { id: uid('b'), name: '羽毛球班', categoryId: 'cat_di', total: 10000, year: y,
+          expectedDate: y + '-01-01', paid: true, paidDate: y + '-02-10', note: '全年分多期' },
+        { id: uid('b'), name: '年度护肤', categoryId: 'cat_fam', total: 3600, year: y,
+          expectedDate: y + '-01-01', paid: false, paidDate: '', note: '' }
       ],
       educationFunds: [
         {
@@ -464,23 +451,25 @@
           if (ins.claims === undefined) { ins.claims = []; dirty = true; }
           ins.claims = ins.claims || [];
         });
-        // 兼容性补全：预算新模型（摊销周期 + 付款子表），废弃旧“分期付款计划”
+        // 兼容性补全：预算简化模型（本年预算金额 / 预计支出 / 是否已付），废弃旧“摊销周期 + 付款子表”
         (DATA.budgets || []).forEach(function (b) {
           if (b.categoryId === undefined || b.categoryId === null) {
             b.categoryId = famCat ? famCat.id : null; dirty = true;
           }
-          // 摊销开始/结束：兼容旧字段 estStart/estEnd
-          if (b.amortStart === undefined) { b.amortStart = b.estStart || (b.estEnd || ''); dirty = true; }
-          if (b.amortEnd === undefined) { b.amortEnd = b.estEnd || ''; dirty = true; }
-          b.payments = b.payments || [];
-          b.payments.forEach(function (p) {
-            if (p.method === undefined) { p.method = '现金'; dirty = true; }
-            if (p.id === undefined) { p.id = uid('p'); dirty = true; }
-            delete p._src; // 旧版关联标记不再使用
-          });
-          if (b.defaultMethod === undefined) { b.defaultMethod = '转账'; dirty = true; }
-          b.phases = []; // 旧“分期付款计划”模型已废弃
+          if (b.year === undefined || b.year === null) { b.year = DATA.viewYear != null ? DATA.viewYear : new Date().getFullYear(); dirty = true; }
           if (b.total === undefined) { b.total = 0; dirty = true; }
+          // 旧“付款计划子表”有付款记录 → 视为已付，取最早一笔付款日期为实付日期
+          var oldPayments = b.payments || [];
+          if (b.paid === undefined) {
+            if (oldPayments.length) {
+              var ds = oldPayments.map(function (p) { return p.date; }).filter(Boolean).sort();
+              b.paid = true; b.paidDate = ds[0] || ''; dirty = true;
+            } else { b.paid = false; b.paidDate = ''; dirty = true; }
+          }
+          if (b.expectedDate === undefined) { b.expectedDate = b.amortStart || ''; dirty = true; }
+          // 清理旧字段
+          delete b.amortStart; delete b.amortEnd; delete b.estStart; delete b.estEnd;
+          delete b.phases; delete b.payments; delete b.defaultMethod;
         });
         if (dirty) saveData();
         return DATA;

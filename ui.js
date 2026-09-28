@@ -236,7 +236,7 @@
     sec.appendChild(h('div', { class: 'section-label' }, ['🎯 今年预算']));
     sec.appendChild(h('div', { class: 'stat-grid three' }, [
       stat('本年实际已付现金', money(ov.paidCashTotal), 'gold'),
-      stat('年度摊销成本', money(ov.allocTotal), 'mint'),
+      stat('本年剩余待付款', money(ov.remainTotal), 'mint'),
       h('div', { class: 'stat accent tappable', 'data-action': 'explain-monthly', style: { cursor: 'pointer' } }, [
         h('div', { class: 's-label' }, '当前月均支出'),
         h('div', { class: 's-value' }, money(ov.monthlyAvgTotal)),
@@ -249,21 +249,21 @@
   function explainMonthly() {
     var y = D.viewYear;
     var ov = C.budgetYearOverview(D, y);
-    var rows = (D.budgets || []).map(function (b) {
+    var rows = (D.budgets || []).filter(function (b) { return C.budgetYearData(b, y).inYear; }).map(function (b) {
       var d = C.budgetYearData(b, y);
       return h('div', { class: 'li-row' }, [
-        h('div', { class: 'li-main' }, [h('div', { class: 'li-title' }, b.name), h('div', { class: 'li-sub' }, '本年实际付款 / 应摊销')]),
-        h('div', { class: 'li-amount' }, money(d.paidThisYear) + ' / ' + money(d.alloc))
+        h('div', { class: 'li-main' }, [h('div', { class: 'li-title' }, b.name), h('div', { class: 'li-sub' }, (d.paid ? '已付 ' + (d.paidDate || '') : '待付') + ' · 月均 ' + money(d.monthlyAvg))]),
+        h('div', { class: 'li-amount' }, money(d.paidCash) + ' / ' + money(d.total))
       ]);
     });
     var body = h('div', {}, [
       h('div', { class: 'ins-key-box' }, [
         h('div', { class: 'ins-key-title' }, '📐 计算口径'),
-        h('div', { class: 'ins-key-text' }, '① 本年实际付款额（现金流）＝ 付款计划子表中“付款日期在本年”的金额之和。② 本年应摊销额（成本）＝ 合同总额 ×（本年覆盖的摊销月数 ÷ 摊销总月数）。③ 月度均摊成本＝ 合同总额 ÷ 摊销总月数（无论看哪年都固定）。')
+        h('div', { class: 'ins-key-text' }, '① 本年预算金额：每年一笔，代表该预算项目今年的总支出计划。② 月度均摊＝ 本年预算金额 ÷ 12（固定，不看摊销周期）。③ 是否已付：在预算里标记“已付”或关联了一笔大额支出/保险交费即视为已付，整笔预算额计入“本年实际已付现金”；未付的余额计入“本年剩余待付款”。')
       ]),
       h('div', { class: 'stat-grid' }, [
         stat('本年实际已付现金', money(ov.paidCashTotal), 'gold'),
-        stat('年度摊销成本', money(ov.allocTotal), 'mint'),
+        stat('本年剩余待付款', money(ov.remainTotal), 'mint'),
         stat('当前月均预算支出', money(ov.monthlyAvgTotal), 'blue')
       ]),
       h('div', { class: 'section-label', style: { margin: '14px 0 8px' } }, ['各预算明细']),
@@ -871,12 +871,15 @@
     confirmDialog('删除大额支出', '确定删除该支出？', function () {
       revertDepositDeduction(e);
       if (e.budgetLink && e.budgetId) {
-        var b = D.budgets.filter(function (x) { return x.id === e.budgetId; })[0];
-        if (b && b.payments) b.payments = b.payments.filter(function (p) { return p._src !== e.id; });
+        clearBudgetPaidIf(D.budgets.filter(function (x) { return x.id === e.budgetId; })[0], e.id);
       }
       r.largeExpenses = r.largeExpenses.filter(function (x) { return x.id !== id; });
       save(); renderFlow();
     });
+  }
+  // 取消预算“已付”标记（仅当该标记是由指定来源 srcId 设置的，避免误清手动标记）
+  function clearBudgetPaidIf(b, srcId) {
+    if (b && b.paidBy === srcId) { b.paid = false; b.paidDate = ''; b.paidBy = null; }
   }
   function delInvest(id) {
     confirmDialog('删除投资支出', '确定删除该投资支出记录吗？', function () {
@@ -1090,11 +1093,32 @@
     children.push(field('支付渠道', pay));
     children.push(depositWrap);
 
+    // 关联预算：先选“分类”，再选该分类下的“预算项目”
+    var budgetCats = (D.budgetCategories || []).map(function (c) { return { value: c.id, label: c.name }; });
+    if ((D.budgets || []).some(function (b) { return !b.categoryId; })) budgetCats.push({ value: '', label: '未分类' });
+    var linkedB = existing && existing.budgetId ? (D.budgets.filter(function (b) { return b.id === existing.budgetId; })[0]) : null;
+    var catLinkSel = select({ value: linkedB ? (linkedB.categoryId || '') : '' }, budgetCats);
+    var budgetSel = select({ value: '' }, [{ value: '', label: '选择预算项目' }]);
+    var initBid = linkedB ? linkedB.id : '';
+    function refreshBudgetOpts() {
+      var cid = catLinkSel.value;
+      var opts = (D.budgets || []).filter(function (b) { return (cid === '' ? !b.categoryId : (b.categoryId || null) === cid); })
+        .map(function (b) { return { value: b.id, label: b.name + (b.year ? ('（' + b.year + '）') : '') }; });
+      budgetSel.innerHTML = '';
+      [{ value: '', label: '选择预算项目' }].concat(opts).forEach(function (o) { budgetSel.appendChild(h('option', { value: o.value }, o.label)); });
+      if (initBid) { budgetSel.value = initBid; initBid = ''; }
+    }
     var link = select({ value: existing && existing.budgetLink ? '是' : '否' }, [{ value: '否', label: '否' }, { value: '是', label: '是' }]);
-    var budgetSel = select({ value: existing && existing.budgetId ? existing.budgetId : '' },
-      [{ value: '', label: '选择预算项目' }].concat(D.budgets.map(function (b) { return { value: b.id, label: b.name }; })));
     var linkWrap = h('div', {});
-    function syncLink() { linkWrap.innerHTML = ''; budgetSel.disabled = link.value !== '是'; linkWrap.appendChild(field('关联预算项目', h('div', { class: 'row2' }, [link, budgetSel]))); }
+    function syncLink() {
+      linkWrap.innerHTML = '';
+      budgetSel.innerHTML = '';
+      linkWrap.appendChild(field('关联预算', link));
+      if (link.value !== '是') return;
+      refreshBudgetOpts();
+      linkWrap.appendChild(field('关联预算（先选分类→项目）', h('div', { class: 'row2' }, [catLinkSel, budgetSel])));
+    }
+    catLinkSel.onchange = refreshBudgetOpts;
     link.onchange = syncLink; syncLink();
     children.push(field('日期', input({ type: 'date', value: existing ? existing.date : P.todayYmd() })));
     children.push(field('备注', input({ value: existing ? existing.note : '', placeholder: '备注' })));
@@ -1124,20 +1148,18 @@
           budgetId: (link.value === '是') ? budgetSel.value || null : null
         };
         if (isEdit) Object.assign(existing, obj); else r.largeExpenses.push(obj);
-        // 预算扣减：关联预算时，把这笔大额支出自动记入该预算的“付款计划”子表
+        // 预算关联：改了关联对象时，清掉旧预算的“已付”标记（仅当是它设的）
         if (!asOther && isEdit && oldRef && oldRef.budgetLink && oldRef.budgetId && oldRef.budgetId !== obj.budgetId) {
-          var ob = D.budgets.filter(function (x) { return x.id === oldRef.budgetId; })[0];
-          if (ob && ob.payments) ob.payments = ob.payments.filter(function (p) { return p._src !== oldRef.id; });
+          clearBudgetPaidIf(D.budgets.filter(function (x) { return x.id === oldRef.budgetId; })[0], oldRef.id);
         }
         var linkedBudget = null;
         if (!asOther && obj.budgetLink && obj.budgetId) {
-          var b = D.budgets.filter(function (x) { return x.id === obj.budgetId; })[0];
-          if (b) {
-            linkedBudget = b;
-            b.payments = b.payments || [];
-            b.payments = b.payments.filter(function (p) { return p._src !== obj.id; });
-            var m = ({ 'wechat': '微信', 'yuebao': '转账', 'bank': '银行', 'other': '现金', '存钱罐': '转账' })[obj.payment] || '转账';
-            b.payments.push({ id: P.uid('p'), date: obj.date, amount: obj.amount, method: m, _src: obj.id });
+          var lb = D.budgets.filter(function (x) { return x.id === obj.budgetId; })[0];
+          if (lb) {
+            linkedBudget = lb;
+            lb.paid = true;                 // 关联大额支出 → 该项视为已付
+            lb.paidDate = obj.date;          // 实际支付日期 = 这笔支出的日期
+            lb.paidBy = obj.id;             // 记录来源，便于取消关联/删除时回退
           }
         }
         applyDepositDeduction(obj);
@@ -1146,7 +1168,7 @@
           var bname = linkedBudget.name;
           toast('已记录'); closeModal(); showPage('flow');
           // 明确提示：这笔钱已自动归入预算的付款计划
-          confirmDialog('已记入预算付款', '这笔 ¥' + money(obj.amount) + '（' + obj.date + '）已自动加入「' + bname + '」的付款计划。点“查看”可去核对该预算的付款明细。', function () { showPage('budget'); budgetDetail(linkedBudget.id); });
+          confirmDialog('已关联预算', '这笔 ¥' + money(obj.amount) + '（' + obj.date + '）已自动标记「' + bname + '」为已付，实付日期 ' + obj.date + '。点“查看”可去核对。', function () { showPage('budget'); budgetDetail(linkedBudget.id); });
         } else {
           toast(existing ? '已更新' : '已记录'); closeModal(); showPage('flow');
         }
@@ -1406,10 +1428,9 @@
    * 年度预算
    * ========================================================= */
   function budgetStatusChip(d) {
-    if (d.remainToPay < 0) return h('span', { class: 'chip danger' }, '超支');
-    if (d.status === '未开始') return h('span', { class: 'chip gray' }, '未开始');
-    if (d.status === '已结束') return h('span', { class: 'chip gray' }, '已结束');
-    return h('span', { class: 'chip teal' }, '进行中');
+    if (d.status === '已付') return h('span', { class: 'chip teal' }, '已付');
+    if (d.status === '其他') return h('span', { class: 'chip gray' }, '其他年份');
+    return h('span', { class: 'chip warn' }, '待付');
   }
   /* 顶部总览小卡 */
   function bovTile(label, value, kind) {
@@ -1442,19 +1463,19 @@
     var y = D.viewYear;
     var ov = C.budgetYearOverview(D, y);
 
-    // 顶部总览：区分“付款现金流”与“摊销成本”
+    // 顶部总览：本年预算金额 / 已付 / 月均 / 剩余
     sec.appendChild(h('div', { class: 'budget-overview-card' }, [
       h('div', { class: 'bov-head' }, [
         h('div', { class: 'bov-title' }, [h('span', {}, '📊'), '年度预算']),
-        h('div', { class: 'bov-remain' }, '全部合同总额 ' + money(ov.sumTotal))
+        h('div', { class: 'bov-remain' }, '全部预算总额 ' + money(ov.sumTotal))
       ]),
       h('div', { class: 'bov-tiles' }, [
         bovTile('本年实际已付现金', money(ov.paidCashTotal), 'cash'),
-        bovTile('年度摊销成本', money(ov.allocTotal), 'cost'),
-        bovTile('当前月均预算支出', money(ov.monthlyAvgTotal), 'avg')
+        bovTile('当前月均预算支出', money(ov.monthlyAvgTotal), 'avg'),
+        bovTile('本年剩余待付款', money(ov.remainTotal), 'cost')
       ]),
       h('div', { class: 'bov-feet bov-feet-2' }, [
-        h('span', {}, ['本年剩余待付款 ', h('span', { class: 'big' }, money(ov.remainTotal))]),
+        h('span', {}, ['本年预算总额 ', h('span', { class: 'big' }, money(ov.sumTotal))]),
         h('span', {}, ['本年已付占比 ', h('span', { class: 'big' }, (ov.sumTotal ? Math.round(ov.paidCashTotal / ov.sumTotal * 100) : 0) + '%')])
       ])
     ]));
@@ -1485,7 +1506,7 @@
       }, [
         h('div', { class: 'budget-cat-name' }, (expanded ? '▼ ' : '▶ ') + (g.id ? '🏷 ' : '📦 ') + g.name),
         h('div', { class: 'budget-cat-sum' }, [
-          h('span', { class: 'bcs-item' }, ['合同总额 ', h('b', {}, money(s.sumTotal))]),
+          h('span', { class: 'bcs-item' }, ['预算总额 ', h('b', {}, money(s.sumTotal))]),
           h('span', { class: 'bcs-item' }, ['本年已付 ', h('b', {}, money(s.paidCash))]),
           h('span', { class: 'bcs-item' }, ['月均 ', h('b', {}, money(s.monthlyAvg))])
         ])
@@ -1506,11 +1527,15 @@
             h('span', { class: 'budget-card-arrow' }, '›')
           ]),
           h('div', { class: 'budget-card-stats' }, [
-            bStat('本年实际付款', d.paidThisYear),
-            bStat('本年应摊销额', d.alloc),
+            bStat('本年预算金额', d.total),
             bStat('月度均摊', d.monthlyAvg),
-            bStat(d.remainToPay < 0 ? '超支' : '剩余待付', d.remainToPay < 0 ? -d.remainToPay : d.remainToPay, d.remainToPay < 0)
-          ])
+            bStat(d.paid ? '已付' : '剩余待付', d.paid ? 0 : d.remainToPay, !d.paid)
+          ]),
+          (d.expectedDate || d.paidDate) ? h('div', { class: 'budget-card-sub' }, [
+            d.expectedDate ? ('预计支出 ' + d.expectedDate) : null,
+            (d.expectedDate && d.paidDate) ? ' · ' : null,
+            d.paidDate ? ('实付 ' + d.paidDate) : null
+          ]) : null
         ]));
       });
       groupEl.appendChild(items);
@@ -1518,44 +1543,13 @@
     });
   }
 
-  function crossYearNote(b, y) {
-    var list = C.budgetCrossYearPayments(b, y);
-    if (!list.length) return null;
-    return h('div', { class: 'budget-cross-note' }, [
-      h('div', { class: 'section-label', style: { margin: '14px 0 6px' } }, ['🔗 跨年付款（' + list.length + '笔）']),
-      h('div', { class: 'li-sub' }, '以下款项已于其他年份支付，不计入 ' + y + ' 年已花费，但已发生：'),
-      list.map(function (p) {
-        return h('div', { class: 'detail-payment-row' }, [
-          h('span', { class: 'dp-date' }, p.date),
-          h('span', { class: 'dp-amount' }, money(p.amount)),
-          h('span', { class: 'dp-tag' }, '已于 ' + p.payYear + ' 年支付')
-        ]);
-      })
-    ]);
-  }
-  /* 旧“分期付款计划”模型已废弃，付款改为统一的“付款计划子表”（见 budgetForm / budgetPaymentForm） */
+  /* 预算详情（简化模型：本年预算金额 / 预计支出 / 是否已付） */
   function budgetDetail(id) {
     var b = D.budgets.filter(function (x) { return x.id === id; })[0];
     if (!b) return;
     var y = D.viewYear;
     var d = C.budgetYearData(b, y);
     var statusChip = budgetStatusChip(d);
-
-    // 付款计划子表
-    var payList = h('div', { class: 'detail-payments' });
-    var payments = b.payments || [];
-    if (!payments.length) {
-      payList.appendChild(h('div', { class: 'empty-sm' }, '暂无付款记录，点下方“＋ 记一笔付款”添加'));
-    } else {
-      payments.forEach(function (p) {
-        payList.appendChild(h('div', { class: 'detail-payment-row tappable', 'data-action': 'edit-budget-payment', 'data-bid': b.id, 'data-pid': p.id }, [
-          h('span', { class: 'dp-date' }, p.date),
-          h('span', { class: 'dp-method' }, (p.method || '现金')),
-          h('span', { class: 'dp-amount' }, money(p.amount)),
-          h('span', { class: 'dp-edit' }, '✎')
-        ]));
-      });
-    }
 
     var body = h('div', {}, [
       h('div', { class: 'budget-detail-head' }, [
@@ -1565,21 +1559,14 @@
           h('button', { class: 'btn btn-sm', onclick: function () { closeModal(); budgetForm(id); } }, '✎ 编辑')
         ])
       ]),
-      h('div', { class: 'budget-detail-period' }, '摊销周期 ' + (b.amortStart || '-') + ' ~ ' + (b.amortEnd || '-') + ' · 合同总额 ' + money(b.total) + (b.categoryId ? ' · ' + catName(b.categoryId) : '')),
+      h('div', { class: 'budget-detail-period' }, '本年预算金额 ' + money(b.total) + (b.categoryId ? ' · ' + catName(b.categoryId) : '') + (b.year ? ' · ' + b.year + ' 年' : '')),
       h('div', { class: 'budget-detail-stats' }, [
-        bdStat('合同总金额', b.total),
-        bdStat('摊销总月数', d.amortMonths + ' 个月'),
-        bdStat('月度均摊成本', d.monthlyAvg),
-        bdStat('本年实际付款', d.paidThisYear),
-        bdStat('本年应摊销额', d.alloc),
-        bdStat(d.remainToPay < 0 ? '超支' : '剩余待付款', d.remainToPay < 0 ? -d.remainToPay : d.remainToPay, d.remainToPay < 0)
+        bdStat('本年预算金额', b.total),
+        bdStat('月度均摊（÷12）', d.monthlyAvg),
+        bdStat(d.paid ? '是否已付' : '剩余待付', d.paid ? '已付' : money(d.remainToPay), !d.paid),
+        d.paidDate ? bdStat('实际支付日期', d.paidDate) : null,
+        d.expectedDate ? bdStat('预计支出时间', d.expectedDate) : null
       ]),
-      // 跨年付款提示：本年之外已付的款，注明“已于 YYYY 年支付”
-      crossYearNote(b, y),
-      // 付款计划子表
-      h('div', { class: 'section-label', style: { margin: '18px 0 8px' } }, ['💸 付款计划（' + payments.length + ' 笔）']),
-      payList,
-      h('button', { class: 'btn btn-sm btn-block', style: { marginTop: 8 }, 'data-action': 'add-budget-payment', 'data-bid': b.id }, '＋ 记一笔付款'),
       b.note ? h('div', { class: 'budget-detail-note' }, b.note) : null
     ]);
     openModal('预算详情', body, [
@@ -1594,122 +1581,65 @@
     var b = id ? D.budgets.filter(function (x) { return x.id === id; })[0] : null;
     var name = input({ value: b ? b.name : '', placeholder: '如：哥哥英语课' });
     var total = input({ type: 'number', step: '0.01', value: b ? b.total : '' });
-    var amortStart = input({ type: 'date', value: b ? b.amortStart : P.todayYmd() });
-    var amortEnd = input({ type: 'date', value: b ? b.amortEnd : '' });
-    var note = input({ value: b ? b.note : '', placeholder: '可选' });
     var catSel = select({ value: b ? (b.categoryId || '') : ((D.budgetCategories || [])[0] || {}).id || '' },
       [{ value: '', label: '未分类' }].concat((D.budgetCategories || []).map(function (c) { return { value: c.id, label: c.name }; })));
-    var defaultMethodSel = select({ value: b ? (b.defaultMethod || '转账') : '转账' }, [
-      { value: '现金', label: '现金' },
-      { value: '转账', label: '转账' },
-      { value: '微信', label: '微信' },
-      { value: '支付宝', label: '支付宝' },
-      { value: '银行', label: '银行' }
-    ]);
-    // 实时计算摊销月数 / 月均摊销成本
+    var expectedDate = input({ type: 'date', value: b ? b.expectedDate : P.todayYmd() });
+    var paidSel = select({ value: b && b.paid ? '是' : '否' }, [{ value: '否', label: '否（待付）' }, { value: '是', label: '是（已付）' }]);
+    var paidDate = input({ type: 'date', value: b ? b.paidDate : P.todayYmd() });
+    var note = input({ value: b ? b.note : '', placeholder: '可选' });
+    // 是否已付 → 控制“实际支付日期”是否可填
+    function syncPaid() {
+      var on = paidSel.value === '是';
+      paidDate.disabled = !on;
+      paidDate.style.opacity = on ? '1' : '0.5';
+    }
+    paidSel.onchange = syncPaid; syncPaid();
+    // 实时计算月均
     var calcHint = h('div', { class: 'li-sub' }, '');
     function updCalc() {
-      var m = C.amortTotalMonths({ amortStart: amortStart.value, amortEnd: amortEnd.value, total: Number(total.value) || 0 });
-      var avg = m ? (Number(total.value) || 0) / m : 0;
-      calcHint.textContent = m ? ('摊销总月数：' + m + ' 个月 · 月均摊销成本：' + money(avg)) : '请填写摊销起止日期';
+      var t = Number(total.value) || 0;
+      calcHint.textContent = t ? ('月度均摊（÷12）：' + money(t / 12) + ' · 全年合计 ' + money(t)) : '请填写本年预算金额';
     }
-    amortStart.onchange = updCalc; amortEnd.onchange = updCalc; total.onchange = updCalc;
-
-    // 付款计划子表
-    var paymentsBox = h('div', {});
-    var payments = b ? (b.payments || []).map(function (p) { return { id: p.id, date: p.date, amount: p.amount, method: p.method || '现金' }; }) : [];
-    function renderPayments() {
-      paymentsBox.innerHTML = '';
-      paymentsBox.appendChild(h('div', { class: 'li-sub' }, '已花费累计按实际付款日期录入（关联大额支出会自动加入）'));
-      payments.forEach(function (p, idx) {
-        var pd = input({ type: 'date', value: p.date });
-        var pa = input({ type: 'number', step: '0.01', value: p.amount });
-        var pm = select({ value: p.method }, [
-          { value: '现金', label: '现金' }, { value: '转账', label: '转账' },
-          { value: '微信', label: '微信' }, { value: '支付宝', label: '支付宝' }, { value: '银行', label: '银行' }
-        ]);
-        pd.onchange = function () { p.date = pd.value; };
-        pa.onchange = function () { p.amount = Number(pa.value) || 0; };
-        pm.onchange = function () { p.method = pm.value; };
-        paymentsBox.appendChild(h('div', { class: 'pay-edit-row' }, [
-          field('付款日期', pd),
-          field('金额', pa),
-          field('方式', pm),
-          h('button', { class: 'btn btn-sm btn-danger', onclick: function () { payments.splice(idx, 1); renderPayments(); } }, '✕')
-        ]));
-      });
-      paymentsBox.appendChild(h('button', { class: 'btn btn-sm', onclick: function () { payments.push({ id: P.uid('p'), date: P.todayYmd(), amount: 0, method: defaultMethodSel.value || '现金' }); renderPayments(); } }, '＋ 添加一笔付款'));
-    }
-    renderPayments();
-    updCalc();
+    total.onchange = updCalc; updCalc();
 
     var body = h('div', {}, [
       field('项目名称', name),
       field('所属分类', catSel),
-      field('合同总金额', total),
-      h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } }, [field('摊销开始日期', amortStart), field('摊销结束日期', amortEnd)]),
-      calcHint,
-      field('默认付款方式', defaultMethodSel, '新年度复制时沿用'),
+      field('本年预算金额', total),
+      field('预计支出时间', expectedDate, '预计在哪个月/哪天支出'),
+      field('是否已付', paidSel),
+      field('实际支付日期', paidDate, '若已付，选实际支付日期'),
       field('备注', note),
-      h('div', { class: 'section-label', style: { margin: '14px 0 6px' } }, ['💸 付款计划（子表）']),
-      paymentsBox
+      calcHint
     ]);
     openModal(b ? '编辑预算' : '新增预算', body, [
       h('button', { class: 'btn', onclick: closeModal }, '取消'),
       h('button', { class: 'btn btn-primary', onclick: function () {
         if (!name.value.trim()) return toast('请填写项目名称');
+        var isPaid = paidSel.value === '是';
         var obj = {
           name: name.value.trim(), categoryId: catSel.value || null, total: Number(total.value) || 0,
-          amortStart: amortStart.value || P.todayYmd(), amortEnd: amortEnd.value || '',
-          defaultMethod: defaultMethodSel.value || '转账', note: note.value.trim(),
-          payments: payments.map(function (p) { return { id: p.id || P.uid('p'), date: p.date, amount: Number(p.amount) || 0, method: p.method || '现金' }; })
+          expectedDate: expectedDate.value || '',
+          paid: isPaid,
+          paidDate: isPaid ? (paidDate.value || P.todayYmd()) : '',
+          note: note.value.trim()
         };
-        if (b) { Object.assign(b, obj); } else { obj.id = P.uid('b'); D.budgets.push(obj); }
+        if (b) { obj.year = b.year || D.viewYear; Object.assign(b, obj); }
+        else { obj.id = P.uid('b'); obj.year = D.viewYear; D.budgets.push(obj); }
         save(); toast(b ? '已更新' : '已添加'); closeModal(); showPage('budget');
       } }, '保存')
     ]);
   }
 
-  /* 记一笔 / 编辑一笔付款（付款计划子表） */
-  function budgetPaymentForm(bId, pId) {
-    var b = D.budgets.filter(function (x) { return x.id === bId; })[0]; if (!b) return;
-    b.payments = b.payments || [];
-    var pay = pId ? b.payments.filter(function (x) { return x.id === pId; })[0] : null;
-    var date = input({ type: 'date', value: pay ? pay.date : P.todayYmd() });
-    var amount = input({ type: 'number', step: '0.01', value: pay ? pay.amount : '', placeholder: '付款金额' });
-    var method = select({ value: pay ? (pay.method || b.defaultMethod || '现金') : (b.defaultMethod || '现金') }, [
-      { value: '现金', label: '现金' }, { value: '转账', label: '转账' },
-      { value: '微信', label: '微信' }, { value: '支付宝', label: '支付宝' }, { value: '银行', label: '银行' }
-    ]);
-    var actions = [
-      h('button', { class: 'btn', onclick: closeModal }, '取消'),
-      h('button', { class: 'btn btn-primary', onclick: function () {
-        if (!amount.value) return toast('请输入金额');
-        var rec = { id: pay ? pay.id : P.uid('p'), date: date.value || P.todayYmd(), amount: Number(amount.value) || 0, method: method.value };
-        if (pay) { var i = b.payments.indexOf(pay); b.payments[i] = rec; } else { b.payments.push(rec); }
-        save(); toast(pay ? '已更新付款' : '已记一笔付款'); closeModal(); budgetDetail(bId);
-      } }, '保存')
-    ];
-    if (pay) actions.push(h('button', { class: 'btn btn-danger', onclick: function () {
-      confirmDialog('删除付款记录', '确定删除该笔付款吗？', function () { b.payments = b.payments.filter(function (x) { return x.id !== pId; }); save(); toast('已删除'); closeModal(); budgetDetail(bId); });
-    } }, '删除'));
-    openModal(pay ? '编辑付款' : '记一笔付款 · ' + b.name, h('div', {}, [
-      h('div', { class: 'li-sub', style: { marginBottom: 10 } }, '合同总额 ' + money(b.total) + ' · 摊销 ' + (b.amortStart || '-') + ' ~ ' + (b.amortEnd || '-')),
-      field('付款日期', date),
-      field('付款金额', amount),
-      field('付款方式', method)
-    ]), actions);
-  }
-
-  /* 复制到新年度：摊销周期顺延一年，付款计划清空，动态数据归零 */
+  /* 复制到新年度：年份+1，已付状态与实付日期清空，预计支出日期顺延一年 */
   function copyBudgetToNewYear(id) {
     var b = D.budgets.filter(function (x) { return x.id === id; })[0]; if (!b) return;
-    var defYear = D.viewYear + 1;
+    var defYear = (b.year ? Number(b.year) : D.viewYear) + 1;
     var yearOpts = []; for (var yy = defYear - 2; yy <= defYear + 3; yy++) yearOpts.push({ value: String(yy), label: yy + ' 年' });
     var yearSel = select({ value: String(defYear) }, yearOpts);
     var suffix = input({ value: '', placeholder: '可选，如：2027' });
     var body = h('div', {}, [
-      h('div', { class: 'li-sub', style: { marginBottom: 10 } }, '将复制「' + b.name + '」到新年度：合同总额、摊销月份长度不变，付款计划清空（新年度的钱还没付），动态数据归零。'),
+      h('div', { class: 'li-sub', style: { marginBottom: 10 } }, '将复制「' + b.name + '」到新年度：本年预算金额、所属分类不变，已付状态清空（新年度的钱还没付），预计支出日期顺延一年。'),
       field('目标年份', yearSel),
       field('名称后缀（可选）', suffix, '留空则沿用原名')
     ]);
@@ -1717,18 +1647,18 @@
       h('button', { class: 'btn', onclick: closeModal }, '取消'),
       h('button', { class: 'btn btn-primary', onclick: function () {
         var ty = Number(yearSel.value) || defYear;
-        var s = P.parseYmd(b.amortStart), e = P.parseYmd(b.amortEnd);
-        var ns = s ? P.ymd(new Date(ty, s.getMonth(), s.getDate())) : b.amortStart;
-        var ne = e ? P.ymd(new Date(ty, e.getMonth(), e.getDate())) : b.amortEnd;
+        var es = P.parseYmd(b.expectedDate);
+        var nes = es ? P.ymd(new Date(ty, es.getMonth(), es.getDate())) : b.expectedDate;
         var clone = {
           id: P.uid('b'),
           name: b.name + (suffix.value ? (' ' + suffix.value.trim()) : ''),
           categoryId: b.categoryId || null,
           total: Number(b.total) || 0,
-          amortStart: ns, amortEnd: ne,
-          defaultMethod: b.defaultMethod || '转账',
-          note: b.note || '',
-          payments: []   // 新年度付款清空
+          year: ty,
+          expectedDate: nes,
+          paid: false,
+          paidDate: '',
+          note: b.note || ''
         };
         D.budgets.push(clone);
         save(); toast('已复制到 ' + ty + ' 年，去微调吧～');
@@ -2701,6 +2631,12 @@
         var rec = { id: pay ? pay.id : P.uid('p'), date: date.value || P.todayYmd(), amount: Number(amount.value) || 0, note: note.value.trim(), budgetLink: !!bId, budgetId: bId, nextRemind: nextRemind.value || null };
         ins.payments = ins.payments || [];
         if (pay) { var i = ins.payments.indexOf(pay); ins.payments[i] = rec; } else { ins.payments.push(rec); }
+        // 预算“已付”标记：改了关联对象先清旧预算，再给新预算置已付
+        if (pay && pay.budgetId && pay.budgetId !== bId) clearBudgetPaidIf(D.budgets.filter(function (x) { return x.id === pay.budgetId; })[0], 'ins_' + pay.id);
+        if (bId) {
+          var ib = D.budgets.filter(function (x) { return x.id === bId; })[0];
+          if (ib) { ib.paid = true; ib.paidDate = rec.date; ib.paidBy = 'ins_' + rec.id; }
+        }
         // 更新提醒（月/日）：改了则重置“本年已完成”状态，下个提醒日再弹
         var md = nextRemind.value ? nextRemind.value.substring(5) : null;
         if (md) {
@@ -2711,7 +2647,11 @@
       } }, '保存')
     ];
     if (pay) actions.push(h('button', { class: 'btn btn-danger', onclick: function () {
-      confirmDialog('删除交费记录', '确定删除该笔交费吗？', function () { ins.payments = (ins.payments || []).filter(function (x) { return x.id !== payId; }); save(); toast('已删除'); closeModal(); insuranceDetail(insId); });
+      confirmDialog('删除交费记录', '确定删除该笔交费吗？', function () {
+        var ib = (ins.payments || []).filter(function (x) { return x.id === payId; })[0];
+        if (ib && ib.budgetId) clearBudgetPaidIf(D.budgets.filter(function (x) { return x.id === ib.budgetId; })[0], 'ins_' + payId);
+        ins.payments = (ins.payments || []).filter(function (x) { return x.id !== payId; }); save(); toast('已删除'); closeModal(); insuranceDetail(insId);
+      });
     } }, '删除'));
 
     openModal(pay ? '编辑交费记录' : '记一笔交费 · ' + ins.type, h('div', {}, [
@@ -2956,20 +2896,13 @@
       (rec.repayments || []).forEach(function (r) { if (r.date === ds) { daySpend += Number(r.amount) || 0; rows.push('还款·' + (r.platform || '') + '（' + channelLabel(r.channel || 'other') + '） ' + money(r.amount)); } });
       (rec.advances || []).forEach(function (a) { if (a.date === ds) { daySpend += Number(a.amount) || 0; rows.push('垫付·' + (a.purpose || '') + ' ' + money(a.amount)); } });
     }
-    // 预算：当日实际付款额 & 当日摊销成本（按天均摊）
-    var dayPay = 0, dayAmort = 0;
-    (D.budgets || []).forEach(function (b) {
-      (b.payments || []).forEach(function (p) { if (p.date === ds) dayPay += Number(p.amount) || 0; });
-      var s = P.parseYmd(b.amortStart || b.estStart), e = P.parseYmd(b.amortEnd || b.estEnd), dd = P.parseYmd(ds);
-      if (s && e && dd && dd >= s && dd <= e) dayAmort += C.budgetDailyAmort(b);
-    });
+    // 预算：当日实际付款额（按“实际支付日期”）
+    var dayPay = 0;
+    (D.budgets || []).forEach(function (b) { if (b.paidDate === ds) dayPay += Number(b.total) || 0; });
     var box = h('div', { class: 'card', style: { marginTop: 12, boxShadow: 'none' } }, [
       h('div', { class: 'card-title' }, ['📌 ' + ds + ' 当日明细']),
       h('div', { class: 'li-sub' }, '当日支出合计：' + money(daySpend)),
-      h('div', { class: 'li-sub', style: { marginTop: 4 } }, [
-        h('span', { class: 'budget-day-pay' }, '预算实际付款 ' + money(dayPay)),
-        h('span', { class: 'budget-day-amort' }, '预算摊销成本 ' + money(dayAmort))
-      ]),
+      dayPay ? h('div', { class: 'li-sub', style: { marginTop: 4 } }, [h('span', { class: 'budget-day-pay' }, '预算实付 ' + money(dayPay))]) : null,
       rec ? h('div', { class: 'li-sub' }, '当月期末余额：' + money(rec.closingBalance)) : null,
       h('div', { class: 'li-sub', style: { marginTop: 4 } }, '存钱罐总额快照：' + money(C.depositTotal(D))),
       h('div', { class: 'li-sub' }, '投资市值：' + money(C.portfolioStat(D.educationFunds).market + C.portfolioStat(D.riskFunds).market)),
@@ -3196,8 +3129,6 @@
       case 'add-budget': budgetForm(); break;
       case 'edit-budget': budgetForm(id); break;
       case 'view-budget-detail': budgetDetail(id); break;
-      case 'add-budget-payment': budgetPaymentForm(el.getAttribute('data-bid'), null); break;
-      case 'edit-budget-payment': budgetPaymentForm(el.getAttribute('data-bid'), el.getAttribute('data-pid')); break;
       case 'del-budget': delBudget(id); break;
       case 'manage-categories': categoryManager(); break;
       case 'manage-credits': manageCredits(); break;

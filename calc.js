@@ -153,109 +153,38 @@
       + portfolioStat(data.riskFunds).market;
   }
 
-  /* ---------- 预算：付款现金流 vs 摊销成本 ---------- */
-  function bStart(b) { return D.parseYmd(b.amortStart || b.estStart); }
-  function bEnd(b) { return D.parseYmd(b.amortEnd || b.estEnd); }
-  // 某月(year,m)是否落在摊销区间 [s, e) 内（期末当日不计入）
-  function monthCovered(s, e, year, m) {
-    var ms = new Date(year, m, 1);       // 该月首日
-    var me = new Date(year, m + 1, 0);   // 该月末日
-    return ms < e && me >= s;            // 与 [s, e) 有重叠即计入
-  }
-  // 摊销总月数：自起始月起，凡是落在 [s, e) 内的自然月都计入，至少 1
-  function amortTotalMonths(b) {
-    var s = bStart(b), e = bEnd(b);
-    if (!s) return 1;
-    if (!e || e <= s) e = new Date(s.getFullYear(), s.getMonth() + 1, 0);
-    var count = 0, y = s.getFullYear(), m = s.getMonth();
-    while (new Date(y, m, 1) < e) {
-      count++;
-      m++;
-      if (m > 11) { m = 0; y++; }
-    }
-    return Math.max(1, count);
-  }
-  // 某年覆盖的摊销月数（按自然月重叠判定，期末当月若在 [s,e) 内则计入）
-  function amortMonthsInYear(b, year) {
-    var s = bStart(b), e = bEnd(b);
-    if (!s) return 0;
-    if (!e || e <= s) e = new Date(s.getFullYear(), s.getMonth() + 1, 0);
-    var count = 0;
-    for (var m = 0; m < 12; m++) if (monthCovered(s, e, year, m)) count++;
-    return count;
-  }
-  // 摊销自然天数（含首尾，用于按天均摊）
-  function amortTotalDays(b) {
-    var s = bStart(b), e = bEnd(b);
-    if (!s || !e) return 0;
-    if (e < s) e = s;
-    return Math.max(1, D.daysBetween(s, e));
-  }
-  // 单日摊销成本（合同总额 / 摊销总天数）
-  function budgetDailyAmort(b) {
-    var total = Number(b.total) || 0;
-    var days = amortTotalDays(b);
-    return days ? total / days : 0;
-  }
-  function budgetYearStatus(b, year) {
-    var s = bStart(b), e = bEnd(b);
-    if (!s) return '未开始';
-    var sY = s.getFullYear(), eY = e ? e.getFullYear() : sY;
-    if (year < sY) return '未开始';
-    if (year > eY) return '已结束';
-    return '进行中';
-  }
-
-  /* 单预算按查看年份的统计（区分“付款现金流”与“摊销成本”） */
+  /* ---------- 预算：本年预算金额 / 预计支出 / 是否已付 ---------- */
+  /* 单预算按查看年份统计（简化模型：不再区分摊销周期，月均＝本年预算金额÷12） */
   function budgetYearData(b, year) {
     var total = Number(b.total) || 0;
-    var status = budgetYearStatus(b, year);
-    var totalMonths = amortTotalMonths(b);
-    var monthsInYear = amortMonthsInYear(b, year);
-    var monthlyAvg = totalMonths ? total / totalMonths : 0;     // 全局月均摊销成本（无论看哪年都固定）
-    var alloc = totalMonths ? total * (monthsInYear / totalMonths) : 0; // 本年应摊销额（成本，按当年覆盖月数比例）
-    // 付款计划子表：本年实际付款额（现金流）＝ 付款日期在本年度的金额之和
-    var paidThisYear = 0;
-    (b.payments || []).forEach(function (p) {
-      var pd = D.parseYmd(p.date);
-      if (pd && pd.getFullYear() === year) paidThisYear += Number(p.amount) || 0;
-    });
-    var remainToPay = total - paidThisYear;                     // 本年剩余待付款（一次性付清则为 0）
+    var inYear = (b.year == null) ? true : (Number(b.year) === Number(year));
+    var monthlyAvg = total / 12;                 // 月度均摊＝本年预算金额 ÷ 12（固定）
+    var isPaid = !!b.paid && inYear;             // 是否已付（且仅当属于本查看年）
+    var paidCash = isPaid ? total : 0;           // 本年实际已付现金：付了即为整笔预算额
+    var remainToPay = total - paidCash;          // 本年剩余待付款
+    var status = isPaid ? '已付' : (inYear ? '待付' : '其他');
     return {
       total: total,
-      amortMonths: totalMonths,
-      monthsInYear: monthsInYear,
       monthlyAvg: monthlyAvg,
-      alloc: alloc,
-      paidThisYear: paidThisYear,
+      paid: isPaid,
+      paidDate: b.paidDate || '',
+      expectedDate: b.expectedDate || '',
+      paidCash: paidCash,
       remainToPay: remainToPay,
       status: status,
-      totalDays: amortTotalDays(b)
+      inYear: inYear
     };
   }
-  function budgetYearAlloc(b, year) { return budgetYearData(b, year).alloc; }
-  function budgetYearRemain(b, year) { return budgetYearData(b, year).remainToPay; }
-  function budgetYearSpent(b, year) { return budgetYearData(b, year).paidThisYear; }
-
-  /* 跨年付款：付款日期不在查看年份的，提示“已于 YYYY 年支付” */
-  function budgetCrossYearPayments(b, year) {
-    var list = [];
-    (b.payments || []).forEach(function (p) {
-      var pd = D.parseYmd(p.date);
-      if (pd && pd.getFullYear() !== year) list.push({ date: p.date, amount: Number(p.amount) || 0, payYear: pd.getFullYear() });
-    });
-    return list;
-  }
-
-  /* 单分类年度汇总：区分现金流与摊销成本 */
+  /* 单分类年度汇总（仅统计属于查看年份的预算） */
   function budgetCategorySummary(data, year, catId) {
     var bs = (data.budgets || []).filter(function (b) { return (b.categoryId || null) === catId; });
-    var sumTotal = 0, paidCash = 0, alloc = 0, monthlyAvg = 0, remain = 0;
+    var sumTotal = 0, paidCash = 0, monthlyAvg = 0, remain = 0;
     bs.forEach(function (b) {
       var d = budgetYearData(b, year);
-      sumTotal += d.total; paidCash += d.paidThisYear; alloc += d.alloc; monthlyAvg += d.monthlyAvg; remain += d.remainToPay;
+      if (!d.inYear) return;
+      sumTotal += d.total; paidCash += d.paidCash; monthlyAvg += d.monthlyAvg; remain += d.remainToPay;
     });
-    return { sumTotal: sumTotal, paidCash: paidCash, alloc: alloc, monthlyAvg: monthlyAvg, remain: remain, count: bs.length };
+    return { sumTotal: sumTotal, paidCash: paidCash, monthlyAvg: monthlyAvg, remain: remain, count: bs.length };
   }
 
   /* 所有分类的年度汇总列表（含未分类） */
@@ -264,27 +193,29 @@
     var rows = cats.map(function (c) {
       return { id: c.id, name: c.name, summary: budgetCategorySummary(data, year, c.id) };
     });
-    var uncat = (data.budgets || []).filter(function (b) { return !(b.categoryId) || !cats.some(function (c) { return c.id === b.categoryId; }); });
+    var uncat = (data.budgets || []).filter(function (b) {
+      var d = budgetYearData(b, year);
+      return d.inYear && (!(b.categoryId) || !cats.some(function (c) { return c.id === b.categoryId; }));
+    });
     if (uncat.length) {
       rows.push({ id: null, name: '未分类', summary: budgetCategorySummary(data, year, null) });
     }
     return rows;
   }
 
-  /* 年度预算总览（某年）：区分现金流与摊销成本 */
+  /* 年度预算总览（某年） */
   function budgetYearOverview(data, year) {
-    var paidCashTotal = 0, allocTotal = 0, monthlyAvgTotal = 0, sumTotal = 0, remainTotal = 0;
+    var paidCashTotal = 0, monthlyAvgTotal = 0, sumTotal = 0, remainTotal = 0;
     (data.budgets || []).forEach(function (b) {
       var d = budgetYearData(b, year);
-      paidCashTotal += d.paidThisYear;
-      allocTotal += d.alloc;
+      if (!d.inYear) return;
+      paidCashTotal += d.paidCash;
       monthlyAvgTotal += d.monthlyAvg;
       sumTotal += d.total;
       remainTotal += d.remainToPay;
     });
     return {
       paidCashTotal: paidCashTotal,
-      allocTotal: allocTotal,
       monthlyAvgTotal: monthlyAvgTotal,
       sumTotal: sumTotal,
       remainTotal: remainTotal
@@ -550,14 +481,7 @@
     portfolioStat: portfolioStat,
     totalAssets: totalAssets,
     budgetYearData: budgetYearData,
-    budgetYearAlloc: budgetYearAlloc,
-    budgetYearRemain: budgetYearRemain,
     budgetYearOverview: budgetYearOverview,
-    budgetCrossYearPayments: budgetCrossYearPayments,
-    amortTotalMonths: amortTotalMonths,
-    amortMonthsInYear: amortMonthsInYear,
-    budgetDailyAmort: budgetDailyAmort,
-    budgetYearStatus: budgetYearStatus,
     budgetCategorySummary: budgetCategorySummary,
     budgetCategoryList: budgetCategoryList,
     last7DaysTrend: last7DaysTrend,
