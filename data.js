@@ -162,6 +162,18 @@
   function sampleData() {
     var y = new Date().getFullYear();
     var m = new Date().getMonth() + 1;
+    // 预算付款计划辅助：按起止年月生成逐期；paidOn 为 { 'YYYY-MM': true } 标记已付
+    function monthsFromTo(fy, fm, ty, tm, paidOn) {
+      var out = [], cur = fy * 12 + (fm - 1), end = ty * 12 + (tm - 1);
+      for (var k = cur; k <= end; k++) {
+        var yy = Math.floor(k / 12), mm = (k % 12) + 1, ym = yy + '-' + pad2(mm);
+        out.push({ expected: ym, paid: !!(paidOn && paidOn[ym]), paidDate: (paidOn && paidOn[ym]) ? (ym + '-15') : '', paidBy: null });
+      }
+      return out;
+    }
+    function paidSet(arr) { var o = {}; arr.forEach(function (ym) { o[ym] = true; }); return o; }
+    var engPaid = paidSet([y + '-09', y + '-10', y + '-11', y + '-12']);
+    var badPaid = paidSet([y + '-01', y + '-02', y + '-03', y + '-04', y + '-05', y + '-06']);
     var lm = m === 1 ? 12 : m - 1;
     var ly = m === 1 ? y - 1 : y;
     var depYuebao = uid('d'); // 余额宝账户（用于演示“存钱罐渠道垫付”扣减）
@@ -220,12 +232,21 @@
         { id: crHuabei, name: '花呗', remaining: 2000 }
       ],
       budgets: [
-        { id: uid('b'), name: '哥哥英语课', categoryId: 'cat_ge', total: 10000, year: y,
-          expectedDate: y + '-03-01', paid: true, paidDate: y + '-03-15', note: '外教课（全年）' },
-        { id: uid('b'), name: '羽毛球班', categoryId: 'cat_di', total: 10000, year: y,
-          expectedDate: y + '-01-01', paid: true, paidDate: y + '-02-10', note: '全年分多期' },
-        { id: uid('b'), name: '年度护肤', categoryId: 'cat_fam', total: 3600, year: y,
-          expectedDate: y + '-01-01', paid: false, paidDate: '', note: '' }
+        // 月付（跨年：9月～次年8月），全年 12000，每月 1000；当年 9-12 月已付
+        { id: uid('b'), name: '哥哥英语课', categoryId: 'cat_ge', total: 12000, year: y, payMethod: 'monthly',
+          schedule: monthsFromTo(y, 9, y + 1, 8, engPaid), note: '外教课（跨年，9月~次年8月）' },
+        // 月付（当年 1-12 月），全年 10000，每月约 833；当年 1-6 月已付
+        { id: uid('b'), name: '羽毛球班', categoryId: 'cat_di', total: 10000, year: y, payMethod: 'monthly',
+          schedule: monthsFromTo(y, 1, y, 12, badPaid), note: '全年分多期' },
+        // 年付（当年 3 月一次性），3600，未付
+        { id: uid('b'), name: '年度护肤', categoryId: 'cat_fam', total: 3600, year: y, payMethod: 'annual',
+          schedule: [{ expected: y + '-03', paid: false, paidDate: '', paidBy: null }], note: '' },
+        // 不定期（自分期数）：当年 7 月、12 月各 4000，共 8000，未付
+        { id: uid('b'), name: '家庭旅游', categoryId: 'cat_fam', total: 8000, year: y, payMethod: 'irregular',
+          schedule: [
+            { expected: y + '-07', paid: false, paidDate: '', paidBy: null },
+            { expected: y + '-12', paid: false, paidDate: '', paidBy: null }
+          ], note: '' }
       ],
       educationFunds: [
         {
@@ -451,25 +472,45 @@
           if (ins.claims === undefined) { ins.claims = []; dirty = true; }
           ins.claims = ins.claims || [];
         });
-        // 兼容性补全：预算简化模型（本年预算金额 / 预计支出 / 是否已付），废弃旧“摊销周期 + 付款子表”
+        // 兼容性补全：预算改为「支付方式 + 逐期付款计划」模型
         (DATA.budgets || []).forEach(function (b) {
           if (b.categoryId === undefined || b.categoryId === null) {
             b.categoryId = famCat ? famCat.id : null; dirty = true;
           }
           if (b.year === undefined || b.year === null) { b.year = DATA.viewYear != null ? DATA.viewYear : new Date().getFullYear(); dirty = true; }
           if (b.total === undefined) { b.total = 0; dirty = true; }
+          if (b.payMethod === undefined) { b.payMethod = 'annual'; dirty = true; }
           // 旧“付款计划子表”有付款记录 → 视为已付，取最早一笔付款日期为实付日期
           var oldPayments = b.payments || [];
-          if (b.paid === undefined) {
+          var legacyPaid = b.paid, legacyPaidDate = b.paidDate;
+          if (legacyPaid === undefined) {
             if (oldPayments.length) {
               var ds = oldPayments.map(function (p) { return p.date; }).filter(Boolean).sort();
-              b.paid = true; b.paidDate = ds[0] || ''; dirty = true;
-            } else { b.paid = false; b.paidDate = ''; dirty = true; }
+              legacyPaid = true; legacyPaidDate = ds[0] || ''; dirty = true;
+            } else { legacyPaid = false; legacyPaidDate = ''; dirty = true; }
           }
           if (b.expectedDate === undefined) { b.expectedDate = b.amortStart || ''; dirty = true; }
+          // 生成 / 规整 schedule（逐期）
+          if (!Array.isArray(b.schedule) || !b.schedule.length) {
+            var ed = (b.expectedDate || '').substring(0, 7);
+            if (!ed && b.year) ed = b.year + '-01';
+            b.schedule = ed ? [{ expected: ed, paid: !!legacyPaid, paidDate: legacyPaidDate || '', paidBy: b.paidBy || null }] : [];
+            dirty = true;
+          } else {
+            b.schedule = b.schedule.map(function (p) {
+              return {
+                expected: String(p.expected || '').substring(0, 7),
+                paid: !!p.paid,
+                paidDate: p.paidDate || '',
+                paidBy: p.paidBy || null
+              };
+            });
+            dirty = true;
+          }
           // 清理旧字段
+          delete b.paid; delete b.paidDate; delete b.paidBy;
           delete b.amortStart; delete b.amortEnd; delete b.estStart; delete b.estEnd;
-          delete b.phases; delete b.payments; delete b.defaultMethod;
+          delete b.phases; delete b.payments; delete b.defaultMethod; delete b.expectedDate;
         });
         if (dirty) saveData();
         return DATA;

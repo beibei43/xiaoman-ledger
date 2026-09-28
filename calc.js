@@ -153,38 +153,71 @@
       + portfolioStat(data.riskFunds).market;
   }
 
-  /* ---------- 预算：本年预算金额 / 预计支出 / 是否已付 ---------- */
-  /* 单预算按查看年份统计（简化模型：不再区分摊销周期，月均＝本年预算金额÷12） */
-  function budgetYearData(b, year) {
+  /* ---------- 预算：支付方式（月付/年付/不定期）+ 逐期实付 + 跨年归属 ----------
+   * 新模型：每条预算含 payMethod 与 schedule（逐期数组）：
+   *   schedule: [{ expected: 'YYYY-MM', paid: bool, paidDate: 'YYYY-MM-DD', paidBy: srcId|null }]
+   * 每期金额 = 本年预算金额 ÷ 期数（等分）。
+   * 跨年：某期落在哪年，预算就“属于”哪年；只统计属于查看年份的期，避免跨年重复计入。
+   */
+  function budgetSchedule(b) {
+    if (b && Array.isArray(b.schedule) && b.schedule.length) {
+      return b.schedule.map(function (p) {
+        return {
+          expected: String(p.expected || '').substring(0, 7),
+          paid: !!p.paid,
+          paidDate: p.paidDate || '',
+          paidBy: p.paidBy || null
+        };
+      }).filter(function (p) { return /^\d{4}-\d{2}$/.test(p.expected); });
+    }
+    // 旧数据兜底：把单笔 expectedDate 当作“年付（一次性）”一期
+    var ed = b && b.expectedDate ? b.expectedDate.substring(0, 7) : null;
+    if (!ed && b && b.year) ed = b.year + '-01';
+    if (!ed) return [];
+    return [{ expected: ed, paid: !!(b && b.paid), paidDate: (b && b.paidDate) || '', paidBy: (b && b.paidBy) || null }];
+  }
+  function budgetPerAmount(b) {
+    var sched = budgetSchedule(b);
     var total = Number(b.total) || 0;
-    var inYear = (b.year == null) ? true : (Number(b.year) === Number(year));
-    var monthlyAvg = total / 12;                 // 月度均摊＝本年预算金额 ÷ 12（固定）
-    var isPaid = !!b.paid && inYear;             // 是否已付（且仅当属于本查看年）
-    var paidCash = isPaid ? total : 0;           // 本年实际已付现金：付了即为整笔预算额
-    var remainToPay = total - paidCash;          // 本年剩余待付款
-    var status = isPaid ? '已付' : (inYear ? '待付' : '其他');
+    return sched.length ? total / sched.length : 0;
+  }
+  function budgetPeriodsInYear(b, year) {
+    var y = String(year);
+    return budgetSchedule(b).filter(function (p) { return p.expected.substring(0, 4) === y; });
+  }
+  /* 单预算按查看年份统计 */
+  function budgetYearData(b, year) {
+    var fullTotal = Number(b.total) || 0;
+    var sched = budgetSchedule(b);
+    var per = sched.length ? fullTotal / sched.length : 0;
+    var inYear = sched.length
+      ? sched.some(function (p) { return p.expected.substring(0, 4) === String(year); })
+      : (b.year == null ? true : Number(b.year) === Number(year));
+    var piy = budgetPeriodsInYear(b, year);
+    var yrTotal = per * piy.length;                       // 该年内的预算额（跨年按期内期数折算）
+    var paidCash = 0; piy.forEach(function (p) { if (p.paid) paidCash += per; });
+    var remainToPay = yrTotal - paidCash;
+    var monthlyAvg = yrTotal / 12;
+    var paidPeriods = piy.filter(function (p) { return p.paid; }).length;
+    var allPaid = piy.length > 0 && paidPeriods === piy.length;
+    var status = allPaid ? '已付' : (inYear ? '待付' : '其他');
     return {
-      total: total,
-      monthlyAvg: monthlyAvg,
-      paid: isPaid,
-      paidDate: b.paidDate || '',
-      expectedDate: b.expectedDate || '',
-      paidCash: paidCash,
-      remainToPay: remainToPay,
-      status: status,
-      inYear: inYear
+      fullTotal: fullTotal, total: yrTotal, per: per, monthlyAvg: monthlyAvg,
+      paid: allPaid, paidCash: paidCash, remainToPay: remainToPay,
+      status: status, inYear: inYear, schedule: piy, scheduleAll: sched,
+      payMethod: b.payMethod || 'annual', paidPeriods: paidPeriods, periodCount: piy.length
     };
   }
   /* 单分类年度汇总（仅统计属于查看年份的预算） */
   function budgetCategorySummary(data, year, catId) {
     var bs = (data.budgets || []).filter(function (b) { return (b.categoryId || null) === catId; });
-    var sumTotal = 0, paidCash = 0, monthlyAvg = 0, remain = 0;
+    var sumTotal = 0, paidCash = 0, monthlyAvg = 0, remain = 0, count = 0;
     bs.forEach(function (b) {
       var d = budgetYearData(b, year);
       if (!d.inYear) return;
-      sumTotal += d.total; paidCash += d.paidCash; monthlyAvg += d.monthlyAvg; remain += d.remainToPay;
+      sumTotal += d.total; paidCash += d.paidCash; monthlyAvg += d.monthlyAvg; remain += d.remainToPay; count++;
     });
-    return { sumTotal: sumTotal, paidCash: paidCash, monthlyAvg: monthlyAvg, remain: remain, count: bs.length };
+    return { sumTotal: sumTotal, paidCash: paidCash, monthlyAvg: monthlyAvg, remain: remain, count: count };
   }
 
   /* 所有分类的年度汇总列表（含未分类） */
@@ -220,6 +253,26 @@
       sumTotal: sumTotal,
       remainTotal: remainTotal
     };
+  }
+
+  /* 全年逐月预计预算金额（仿保险月历）：每月 = 该月所有预算期的预计额之和 */
+  function budgetMonthlyForecast(data, year) {
+    var arr = []; for (var m = 1; m <= 12; m++) arr.push({ month: m, expected: 0, paid: 0, items: [] });
+    (data.budgets || []).forEach(function (b) {
+      var d = budgetYearData(b, year);
+      if (!d.inYear) return;
+      var per = d.per;
+      d.schedule.forEach(function (p) {
+        var mm = Number(p.expected.substring(5, 7));
+        var idx = mm - 1;
+        arr[idx].expected += per;
+        if (p.paid) arr[idx].paid += per;
+        arr[idx].items.push({ id: b.id, name: b.name, amount: per, paid: p.paid, expected: p.expected });
+      });
+    });
+    var total = 0, peak = 0, peakMonth = 0;
+    arr.forEach(function (r) { total += r.expected; if (r.expected > peak) { peak = r.expected; peakMonth = r.month; } });
+    return { months: arr, total: total, monthlyAvg: total / 12, peak: peak, peakMonth: peakMonth };
   }
 
   /* ---------- 保险：年度保费合计（全家）与月均 ---------- */
@@ -484,6 +537,10 @@
     budgetYearOverview: budgetYearOverview,
     budgetCategorySummary: budgetCategorySummary,
     budgetCategoryList: budgetCategoryList,
+    budgetSchedule: budgetSchedule,
+    budgetPerAmount: budgetPerAmount,
+    budgetPeriodsInYear: budgetPeriodsInYear,
+    budgetMonthlyForecast: budgetMonthlyForecast,
     last7DaysTrend: last7DaysTrend,
     monthCategoryBreakdown: monthCategoryBreakdown,
     yearMonthConsumption: yearMonthConsumption,
