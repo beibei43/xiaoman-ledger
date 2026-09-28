@@ -238,8 +238,8 @@
         // 月付（当年 1-12 月），全年 10000，每月约 833；当年 1-6 月已付
         { id: uid('b'), name: '羽毛球班', categoryId: 'cat_di', total: 10000, year: y, payMethod: 'monthly',
           schedule: monthsFromTo(y, 1, y, 12, badPaid), note: '全年分多期' },
-        // 年付（当年 3 月一次性），3600，未付
-        { id: uid('b'), name: '年度护肤', categoryId: 'cat_fam', total: 3600, year: y, payMethod: 'annual',
+        // 一次性付（当年 3 月一次性），3600，未付
+        { id: uid('b'), name: '年度护肤', categoryId: 'cat_fam', total: 3600, year: y, payMethod: 'once',
           schedule: [{ expected: y + '-03', paid: false, paidDate: '', paidBy: null }], note: '' },
         // 不定期（自分期数）：当年 7 月、12 月各 4000，共 8000，未付
         { id: uid('b'), name: '家庭旅游', categoryId: 'cat_fam', total: 8000, year: y, payMethod: 'irregular',
@@ -479,7 +479,12 @@
           }
           if (b.year === undefined || b.year === null) { b.year = DATA.viewYear != null ? DATA.viewYear : new Date().getFullYear(); dirty = true; }
           if (b.total === undefined) { b.total = 0; dirty = true; }
-          if (b.payMethod === undefined) { b.payMethod = 'annual'; dirty = true; }
+          if (b.payMethod === undefined) { b.payMethod = 'once'; dirty = true; }
+          // 旧模型中的「年付」：单期→一次性付；多年期（支付周期跨年）→不定期付
+          if (b.payMethod === 'annual') {
+            b.payMethod = (Array.isArray(b.schedule) && b.schedule.length > 1) ? 'irregular' : 'once';
+            dirty = true;
+          }
           // 旧“付款计划子表”有付款记录 → 视为已付，取最早一笔付款日期为实付日期
           var oldPayments = b.payments || [];
           var legacyPaid = b.paid, legacyPaidDate = b.paidDate;

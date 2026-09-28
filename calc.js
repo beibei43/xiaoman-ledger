@@ -205,7 +205,7 @@
       fullTotal: fullTotal, total: yrTotal, per: per, monthlyAvg: monthlyAvg,
       paid: allPaid, paidCash: paidCash, remainToPay: remainToPay,
       status: status, inYear: inYear, schedule: piy, scheduleAll: sched,
-      payMethod: b.payMethod || 'annual', paidPeriods: paidPeriods, periodCount: piy.length
+      payMethod: b.payMethod || 'once', paidPeriods: paidPeriods, periodCount: piy.length
     };
   }
   /* 单分类年度汇总（仅统计属于查看年份的预算） */

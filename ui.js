@@ -1109,7 +1109,7 @@
         .map(function (b) {
           var s = C.budgetSchedule(b);
           var lbl = b.name;
-          if (s.length) { lbl += '（' + payMethodLabel(b.payMethod || 'annual') + ' ' + s[0].expected + (s.length > 1 ? '~' + s[s.length - 1].expected : '') + '）'; }
+          if (s.length) { lbl += '（' + payMethodLabel(b.payMethod || 'once') + ' ' + s[0].expected + (s.length > 1 ? '~' + s[s.length - 1].expected : '') + '）'; }
           else if (b.year) { lbl += '（' + b.year + '）'; }
           return { value: b.id, label: lbl };
         });
@@ -1470,7 +1470,7 @@
     var c = (D.budgetCategories || []).filter(function (x) { return x.id === id; })[0];
     return c ? c.name : '未分类';
   }
-  function payMethodLabel(m) { return m === 'monthly' ? '月付' : (m === 'annual' ? '年付' : (m === 'irregular' ? '不定期' : '年付')); }
+  function payMethodLabel(m) { return m === 'monthly' ? '按月付' : (m === 'once' ? '一次性付' : (m === 'irregular' ? '不定期付' : '一次性付')); }
   /* 预算月历：全年逐月预计预算支出（仿保险月历） */
   function budgetForecastSection(year) {
     var fc = C.budgetMonthlyForecast(D, year);
@@ -1499,7 +1499,7 @@
         fc.peakMonth ? h('span', { class: 'chip red' }, '峰值 ' + fc.peakMonth + '月 ' + money(fc.peak)) : null
       ]),
       h('div', { class: 'ins-fc-bars' }, bars),
-      h('div', { class: 'ins-fc-hint' }, '按各预算的支付方式（月付/年付/不定期）与预计年月推算每月要预留的金额；某月所有期都已付会标记绿色。点某月看明细。')
+      h('div', { class: 'ins-fc-hint' }, '按各预算的支付方式（一次性付/按月付/不定期付）与预计年月推算每月要预留的金额；某月所有期都已付会标记绿色。点某月看明细。')
     ]);
   }
   function budgetMonthDetail(month) {
@@ -1594,7 +1594,7 @@
           h('div', { class: 'budget-card-stats' }, [
             bStat('本年预算金额', d.total),
             bStat('月度均摊', d.monthlyAvg),
-            bStat(d.paid ? '已付' : '剩余待付', d.paid ? 0 : d.remainToPay, !d.paid)
+            bStat('待付', d.remainToPay, d.remainToPay > 0)
           ]),
           h('div', { class: 'budget-card-sub' }, [
             payMethodLabel(d.payMethod),
@@ -1629,11 +1629,10 @@
         sched.forEach(function (p) {
           var inY = p.expected.substring(0, 4) === String(y);
           var chk = h('input', { type: 'checkbox' }); chk.checked = !!p.paid;
-          var dt = input({ type: 'date', value: p.paidDate || P.todayYmd() }); dt.disabled = !chk.checked;
+          var dt = input({ type: 'date', value: p.paidDate || P.todayYmd() });
           chk.onchange = function () {
             p.paid = chk.checked;
-            if (p.paid) { p.paidDate = dt.value; } else { p.paidDate = ''; p.paidBy = null; }
-            dt.disabled = !p.paid;
+            if (p.paid) { if (!p.paidDate) p.paidDate = dt.value || P.todayYmd(); } else { p.paidDate = ''; p.paidBy = null; }
             save(); render();                         // 刷新本弹窗（含“已付”统计/状态）
             if (typeof renderBudget === 'function') renderBudget(); // 同步底层预算首页
           };
@@ -1663,7 +1662,7 @@
           bdStat('每期金额', per),
           bdStat('本年预计', d.total),
           bdStat('本年已付', d.paidCash),
-          bdStat(d.paid ? '本年状态' : '本年待付', d.paid ? '已全部付' : money(d.remainToPay), !d.paid),
+          bdStat('本年待付', d.remainToPay, d.remainToPay > 0),
           bdStat('期数', d.periodCount + ' 期（已付 ' + d.paidPeriods + '）')
         ]),
         h('div', { class: 'section-label', style: { marginTop: 10 } }, ['💸 付款计划（勾选已付并填日期）']),
@@ -1689,7 +1688,7 @@
     var note = input({ value: b ? b.note : '', placeholder: '可选' });
 
     // 付款计划（工作副本）
-    var method = b && b.payMethod ? b.payMethod : 'monthly';
+    var method = b && b.payMethod ? b.payMethod : 'once';
     var periods = (b && Array.isArray(b.schedule) && b.schedule.length)
       ? b.schedule.map(function (p) { return { expected: p.expected, paid: !!p.paid, paidDate: p.paidDate || '', paidBy: p.paidBy || null }; })
       : (b && b.expectedDate
@@ -1697,18 +1696,16 @@
           : []);
 
     var methodSel = select({ value: method }, [
-      { value: 'monthly', label: '月付（选支付周期，按月生成付款计划）' },
-      { value: 'annual', label: '年付（选支付周期，按年生成付款计划）' },
-      { value: 'irregular', label: '不定期（自定分期）' }
+      { value: 'once', label: '一次性付（一次付完，只填预计日期）' },
+      { value: 'monthly', label: '按月付（选支付周期，按月生成付款计划）' },
+      { value: 'irregular', label: '不定期付（自定分期数）' }
     ]);
     var defFrom = (periods.length) ? parseYM(periods[0].expected) : { y: D.viewYear, m: 1 };
     var defTo = (periods.length) ? parseYM(periods[periods.length - 1].expected) : { y: D.viewYear, m: 12 };
     var fromSel = ymSelect(defFrom.y, defFrom.m);
     var toSel = ymSelect(defTo.y, defTo.m);
-    var defAFrom = (periods.length) ? parseYM(periods[0].expected) : { y: D.viewYear, m: 1 };
-    var defATo = (periods.length) ? parseYM(periods[periods.length - 1].expected) : { y: D.viewYear, m: 12 };
-    var annualFromSel = ymSelect(defAFrom.y, defAFrom.m);
-    var annualToSel = ymSelect(defATo.y, defATo.m);
+    var defOnce = (periods.length) ? parseYM(periods[0].expected) : { y: D.viewYear, m: 1 };
+    var onceSel = ymSelect(defOnce.y, defOnce.m);
 
     var timeWrap = h('div', {});
     var scheduleWrap = h('div', {});
@@ -1721,23 +1718,16 @@
     }
     function rebuildList() {
       var list = [];
-      if (methodSel.value === 'monthly') {
+      if (methodSel.value === 'once') {
+        list.push(onceSel.get());
+      } else if (methodSel.value === 'monthly') {
         var s = fromSel.get(), e = toSel.get(); if (s > e) e = s;
         var sy = Number(s.substring(0, 4)), sm = Number(s.substring(5, 7));
         var ey = Number(e.substring(0, 4)), em = Number(e.substring(5, 7));
         var cur = sy * 12 + (sm - 1), end = ey * 12 + (em - 1);
         for (var k = cur; k <= end; k++) { var yy = Math.floor(k / 12), mm = (k % 12) + 1; list.push(yy + '-' + P.pad2(mm)); }
-      } else if (methodSel.value === 'annual') {
-        // 年付：支付周期内每年同一月一期（止年月份与起始月不同则末期为止年月份）
-        var as = annualFromSel.get(), ae = annualToSel.get();
-        var ay = Number(as.substring(0, 4)), am = Number(as.substring(5, 7));
-        var aey = Number(ae.substring(0, 4)), aem = Number(ae.substring(5, 7));
-        var acur = ay * 12 + (am - 1), aend = aey * 12 + (aem - 1);
-        if (acur > aend) { var at = acur; acur = aend; aend = at; }
-        while (acur <= aend) { var ay2 = Math.floor(acur / 12), am2 = (acur % 12) + 1; list.push(ay2 + '-' + P.pad2(am2)); acur += 12; }
-        var endYM = aey + '-' + P.pad2(aem);
-        if (list.length && list[list.length - 1] !== endYM && endYM > list[list.length - 1]) list.push(endYM);
       }
+      // irregular 不自动生成（手动分期）
       var keep = {}; periods.forEach(function (p) { keep[p.expected] = p; });
       periods = list.map(function (ym) { return keep[ym] || { expected: ym, paid: false, paidDate: '', paidBy: null }; });
     }
@@ -1745,14 +1735,17 @@
       var leftKids = [];
       if (methodSel.value === 'irregular') {
         var ys = ymSelect(Number(p.expected.substring(0, 4)), Number(p.expected.substring(5, 7)));
-        ys.onchange = function () { p.expected = ys.get(); syncPaidCount(); };
+        // 注意：ymSelect 返回的是 {ys, ms, get} 对象，onchange 必须绑在真实的 <select> 节点上
+        var onYm = function () { p.expected = ys.get(); syncPaidCount(); };
+        ys.ys.onchange = onYm; ys.ms.onchange = onYm;
         leftKids.push(ymField('预计年月', ys));
       } else {
         leftKids.push(h('div', { class: 'field' }, [h('label', {}, '预计'), h('div', { class: 'li-sub', style: { paddingTop: 6 } }, p.expected)]));
       }
       var chk = h('input', { type: 'checkbox' }); chk.checked = !!p.paid;
-      var dt = input({ type: 'date', value: p.paidDate || P.todayYmd() }); dt.disabled = !chk.checked;
-      chk.onchange = function () { p.paid = chk.checked; if (p.paid) p.paidDate = dt.value; else { p.paidDate = ''; p.paidBy = null; } dt.disabled = !p.paid; syncPaidCount(); };
+      var dt = input({ type: 'date', value: p.paidDate || P.todayYmd() });
+      // 实付日期始终可点选（勾选已付时自动填当天，取消勾选则清空），避免 disabled 时序问题导致点不进去
+      chk.onchange = function () { p.paid = chk.checked; if (p.paid) { if (!p.paidDate) p.paidDate = dt.value || P.todayYmd(); } else { p.paidDate = ''; p.paidBy = null; } syncPaidCount(); };
       dt.onchange = function () { p.paidDate = dt.value; };
       var kids = leftKids.concat([field('已付', chk), field('实付日期', dt)]);
       if (methodSel.value === 'irregular') {
@@ -1775,13 +1768,12 @@
     var firstSync = true;
     function syncTime() {
       timeWrap.innerHTML = '';
-      if (methodSel.value === 'monthly') {
+      if (methodSel.value === 'once') {
+        timeWrap.appendChild(ymField('预计日期（年-月）', onceSel));
+        rebuildList();
+      } else if (methodSel.value === 'monthly') {
         timeWrap.appendChild(ymField('支付周期·起（年-月）', fromSel));
         timeWrap.appendChild(ymField('支付周期·止（年-月）', toSel));
-        rebuildList();
-      } else if (methodSel.value === 'annual') {
-        timeWrap.appendChild(ymField('支付周期·起（年-月）', annualFromSel));
-        timeWrap.appendChild(ymField('支付周期·止（年-月）', annualToSel));
         rebuildList();
       } else {
         timeWrap.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: addIrr }, '＋ 增加一期'));
@@ -1793,10 +1785,9 @@
     methodSel.onchange = syncTime;
     // 注意：ymSelect 返回的是 {ys, ms, get} 对象，onchange 必须绑在真实的 <select> 节点(ys/ms)上
     var onTimeChange = function () { rebuildList(); renderSchedule(); syncPaidCount(); };
+    onceSel.ys.onchange = onTimeChange; onceSel.ms.onchange = onTimeChange;
     fromSel.ys.onchange = onTimeChange; fromSel.ms.onchange = onTimeChange;
     toSel.ys.onchange = onTimeChange; toSel.ms.onchange = onTimeChange;
-    annualFromSel.ys.onchange = onTimeChange; annualFromSel.ms.onchange = onTimeChange;
-    annualToSel.ys.onchange = onTimeChange; annualToSel.ms.onchange = onTimeChange;
     total.onchange = syncPaidCount;
     syncTime();
     firstSync = false;
@@ -1862,7 +1853,7 @@
           categoryId: b.categoryId || null,
           total: Number(b.total) || 0,
           year: ty,
-          payMethod: b.payMethod || 'annual',
+          payMethod: b.payMethod || 'once',
           schedule: newSched,
           note: b.note || ''
         };
