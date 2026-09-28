@@ -1205,7 +1205,7 @@
   function parseYM(s) { var p = String(s).split('-'); return { y: Number(p[0]), m: Number(p[1]) }; }
   function ymSelect(defYear, defMonth) {
     var cy = new Date().getFullYear();
-    var yOpts = []; for (var y = cy - 2; y <= cy + 2; y++) yOpts.push({ value: String(y), label: String(y) + '年' });
+    var yOpts = []; for (var y = cy - 5; y <= cy + 10; y++) yOpts.push({ value: String(y), label: String(y) + '年' });
     var mOpts = []; for (var i = 1; i <= 12; i++) mOpts.push({ value: P.pad2(i), label: i + '月' });
     var ys = select({ value: String(defYear) }, yOpts);
     var ms = select({ value: P.pad2(defMonth) }, mOpts);
@@ -1550,6 +1550,8 @@
       h('button', { class: 'btn btn-sm', 'data-action': 'manage-categories' }, '分类'),
       h('button', { class: 'btn btn-sm', 'data-action': 'add-budget' }, '＋')
     ]));
+    // 全年逐月预计预算支出（仿保险月历）—— 放在年度预算框下方，不置底
+    sec.appendChild(budgetForecastSection(y));
     if (!D.budgets.length) {
       sec.appendChild(h('div', { class: 'empty' }, [h('span', { class: 'em-ico' }, '🎯'), '还没有预算项目，点上方“＋”添加吧～']));
       return;
@@ -1604,8 +1606,6 @@
       groupEl.appendChild(items);
       sec.appendChild(groupEl);
     });
-    // 底部：全年逐月预计预算支出（仿保险月历）
-    sec.appendChild(budgetForecastSection(y));
   }
 
   /* 预算详情（支付方式 + 逐期实付） */
@@ -1685,16 +1685,18 @@
           : []);
 
     var methodSel = select({ value: method }, [
-      { value: 'monthly', label: '月付（选起止年月）' },
-      { value: 'annual', label: '年付（选某年某月）' },
-      { value: 'irregular', label: '不定期（自分期数）' }
+      { value: 'monthly', label: '月付（选支付周期，按月生成付款计划）' },
+      { value: 'annual', label: '年付（选支付周期，按年生成付款计划）' },
+      { value: 'irregular', label: '不定期（自定分期）' }
     ]);
     var defFrom = (periods.length) ? parseYM(periods[0].expected) : { y: D.viewYear, m: 1 };
     var defTo = (periods.length) ? parseYM(periods[periods.length - 1].expected) : { y: D.viewYear, m: 12 };
     var fromSel = ymSelect(defFrom.y, defFrom.m);
     var toSel = ymSelect(defTo.y, defTo.m);
-    var defA = (periods.length) ? parseYM(periods[0].expected) : { y: D.viewYear, m: 1 };
-    var annualSel = ymSelect(defA.y, defA.m);
+    var defAFrom = (periods.length) ? parseYM(periods[0].expected) : { y: D.viewYear, m: 1 };
+    var defATo = (periods.length) ? parseYM(periods[periods.length - 1].expected) : { y: D.viewYear, m: 12 };
+    var annualFromSel = ymSelect(defAFrom.y, defAFrom.m);
+    var annualToSel = ymSelect(defATo.y, defATo.m);
 
     var timeWrap = h('div', {});
     var scheduleWrap = h('div', {});
@@ -1713,7 +1715,17 @@
         var ey = Number(e.substring(0, 4)), em = Number(e.substring(5, 7));
         var cur = sy * 12 + (sm - 1), end = ey * 12 + (em - 1);
         for (var k = cur; k <= end; k++) { var yy = Math.floor(k / 12), mm = (k % 12) + 1; list.push(yy + '-' + P.pad2(mm)); }
-      } else { list.push(annualSel.get()); }
+      } else if (methodSel.value === 'annual') {
+        // 年付：支付周期内每年同一月一期（止年月份与起始月不同则末期为止年月份）
+        var as = annualFromSel.get(), ae = annualToSel.get();
+        var ay = Number(as.substring(0, 4)), am = Number(as.substring(5, 7));
+        var aey = Number(ae.substring(0, 4)), aem = Number(ae.substring(5, 7));
+        var acur = ay * 12 + (am - 1), aend = aey * 12 + (aem - 1);
+        if (acur > aend) { var at = acur; acur = aend; aend = at; }
+        while (acur <= aend) { var ay2 = Math.floor(acur / 12), am2 = (acur % 12) + 1; list.push(ay2 + '-' + P.pad2(am2)); acur += 12; }
+        var endYM = aey + '-' + P.pad2(aem);
+        if (list.length && list[list.length - 1] !== endYM && endYM > list[list.length - 1]) list.push(endYM);
+      }
       var keep = {}; periods.forEach(function (p) { keep[p.expected] = p; });
       periods = list.map(function (ym) { return keep[ym] || { expected: ym, paid: false, paidDate: '', paidBy: null }; });
     }
@@ -1752,11 +1764,12 @@
     function syncTime() {
       timeWrap.innerHTML = '';
       if (methodSel.value === 'monthly') {
-        timeWrap.appendChild(ymField('起（年-月）', fromSel));
-        timeWrap.appendChild(ymField('止（年-月）', toSel));
+        timeWrap.appendChild(ymField('支付周期·起（年-月）', fromSel));
+        timeWrap.appendChild(ymField('支付周期·止（年-月）', toSel));
         rebuildList();
       } else if (methodSel.value === 'annual') {
-        timeWrap.appendChild(ymField('预计哪年哪月付', annualSel));
+        timeWrap.appendChild(ymField('支付周期·起（年-月）', annualFromSel));
+        timeWrap.appendChild(ymField('支付周期·止（年-月）', annualToSel));
         rebuildList();
       } else {
         timeWrap.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: addIrr }, '＋ 增加一期'));
@@ -1766,9 +1779,12 @@
       renderSchedule(); syncPaidCount();
     }
     methodSel.onchange = syncTime;
-    fromSel.onchange = function () { rebuildList(); renderSchedule(); syncPaidCount(); };
-    toSel.onchange = function () { rebuildList(); renderSchedule(); syncPaidCount(); };
-    annualSel.onchange = function () { rebuildList(); renderSchedule(); syncPaidCount(); };
+    // 注意：ymSelect 返回的是 {ys, ms, get} 对象，onchange 必须绑在真实的 <select> 节点(ys/ms)上
+    var onTimeChange = function () { rebuildList(); renderSchedule(); syncPaidCount(); };
+    fromSel.ys.onchange = onTimeChange; fromSel.ms.onchange = onTimeChange;
+    toSel.ys.onchange = onTimeChange; toSel.ms.onchange = onTimeChange;
+    annualFromSel.ys.onchange = onTimeChange; annualFromSel.ms.onchange = onTimeChange;
+    annualToSel.ys.onchange = onTimeChange; annualToSel.ms.onchange = onTimeChange;
     total.onchange = syncPaidCount;
     syncTime();
     firstSync = false;
