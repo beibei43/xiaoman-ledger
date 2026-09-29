@@ -160,44 +160,58 @@
    * 跨年：某期落在哪年，预算就“属于”哪年；只统计属于查看年份的期，避免跨年重复计入。
    */
   function budgetSchedule(b) {
+    var raw = [];
     if (b && Array.isArray(b.schedule) && b.schedule.length) {
-      return b.schedule.map(function (p) {
+      raw = b.schedule.filter(function (p) { return /^\d{4}-\d{2}$/.test(String(p.expected || '').substring(0, 7)); }).map(function (p) {
         return {
           expected: String(p.expected || '').substring(0, 7),
           paid: !!p.paid,
           paidDate: p.paidDate || '',
-          paidBy: p.paidBy || null
+          paidBy: p.paidBy || null,
+          amount: (p.amount === undefined || p.amount === null) ? null : (Number(p.amount) || 0),
+          paidAmount: (p.paidAmount === undefined || p.paidAmount === null) ? null : (Number(p.paidAmount) || 0)
         };
-      }).filter(function (p) { return /^\d{4}-\d{2}$/.test(p.expected); });
+      });
+    } else {
+      // 旧数据兜底：把单笔 expectedDate 当作“一次性”一期
+      var ed = b && b.expectedDate ? b.expectedDate.substring(0, 7) : null;
+      if (!ed && b && b.year) ed = b.year + '-01';
+      if (!ed) return [];
+      raw = [{ expected: ed, paid: !!(b && b.paid), paidDate: (b && b.paidDate) || '', paidBy: (b && b.paidBy) || null, amount: null, paidAmount: null }];
     }
-    // 旧数据兜底：把单笔 expectedDate 当作“年付（一次性）”一期
-    var ed = b && b.expectedDate ? b.expectedDate.substring(0, 7) : null;
-    if (!ed && b && b.year) ed = b.year + '-01';
-    if (!ed) return [];
-    return [{ expected: ed, paid: !!(b && b.paid), paidDate: (b && b.paidDate) || '', paidBy: (b && b.paidBy) || null }];
+    var n = raw.length;
+    var total = Number(b.total) || 0;
+    // 每期金额默认 = 本年预算金额 ÷ 期数；实付金额默认 = 计划金额（未填则取计划金额）
+    raw.forEach(function (p) {
+      if (p.amount === null) p.amount = n ? total / n : 0;
+      if (p.paidAmount === null) p.paidAmount = p.amount;
+    });
+    return raw;
   }
   function budgetPerAmount(b) {
     var sched = budgetSchedule(b);
-    var total = Number(b.total) || 0;
-    return sched.length ? total / sched.length : 0;
+    if (!sched.length) return 0;
+    var sum = sched.reduce(function (s, p) { return s + (Number(p.amount) || 0); }, 0);
+    return sum / sched.length;
   }
   function budgetPeriodsInYear(b, year) {
     var y = String(year);
     return budgetSchedule(b).filter(function (p) { return p.expected.substring(0, 4) === y; });
   }
-  /* 单预算按查看年份统计 */
+  /* 单预算按查看年份统计（按各期实际金额求和，支持每期金额不等） */
   function budgetYearData(b, year) {
-    var fullTotal = Number(b.total) || 0;
     var sched = budgetSchedule(b);
-    var per = sched.length ? fullTotal / sched.length : 0;
+    var n = sched.length;
+    var fullTotal = n ? sched.reduce(function (s, p) { return s + (Number(p.amount) || 0); }, 0) : (Number(b.total) || 0);
     var inYear = sched.length
       ? sched.some(function (p) { return p.expected.substring(0, 4) === String(year); })
       : (b.year == null ? true : Number(b.year) === Number(year));
     var piy = budgetPeriodsInYear(b, year);
-    var yrTotal = per * piy.length;                       // 该年内的预算额（跨年按期内期数折算）
-    var paidCash = 0; piy.forEach(function (p) { if (p.paid) paidCash += per; });
+    var yrTotal = piy.reduce(function (s, p) { return s + (Number(p.amount) || 0); }, 0);          // 该年各期计划金额之和
+    var paidCash = piy.filter(function (p) { return p.paid; }).reduce(function (s, p) { return s + (Number(p.paidAmount) || 0); }, 0); // 该年已付实际金额之和
     var remainToPay = yrTotal - paidCash;
     var monthlyAvg = yrTotal / 12;
+    var per = n ? fullTotal / n : 0;
     var paidPeriods = piy.filter(function (p) { return p.paid; }).length;
     var allPaid = piy.length > 0 && paidPeriods === piy.length;
     var status = allPaid ? '已付' : (inYear ? '待付' : '其他');
@@ -261,13 +275,13 @@
     (data.budgets || []).forEach(function (b) {
       var d = budgetYearData(b, year);
       if (!d.inYear) return;
-      var per = d.per;
       d.schedule.forEach(function (p) {
         var mm = Number(p.expected.substring(5, 7));
         var idx = mm - 1;
-        arr[idx].expected += per;
-        if (p.paid) arr[idx].paid += per;
-        arr[idx].items.push({ id: b.id, name: b.name, amount: per, paid: p.paid, expected: p.expected });
+        var amt = Number(p.amount) || 0;
+        arr[idx].expected += amt;
+        if (p.paid) arr[idx].paid += (Number(p.paidAmount) || 0);
+        arr[idx].items.push({ id: b.id, name: b.name, amount: amt, paid: p.paid, expected: p.expected, paidAmount: (Number(p.paidAmount) || 0) });
       });
     });
     var total = 0, peak = 0, peakMonth = 0;

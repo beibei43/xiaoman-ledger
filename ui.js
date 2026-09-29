@@ -1577,9 +1577,21 @@
         ])
       ]));
       var items = h('div', { class: 'budget-cat-items' + (expanded ? '' : ' collapsed') });
+      var catItems = [];
       D.budgets.forEach(function (b) {
         if ((b.categoryId || null) !== g.id) return;
         var d = C.budgetYearData(b, y);
+        if (!d.inYear) return;                 // 跨年：没有周期延续到本年的预算项不在本年视图出现
+        catItems.push({ b: b, d: d });
+      });
+      // 排序：有未付金额的排前面，已全部付完的排后面
+      catItems.sort(function (a, b) {
+        var au = a.d.remainToPay > 0 ? 0 : 1, bu = b.d.remainToPay > 0 ? 0 : 1;
+        if (au !== bu) return au - bu;
+        return 0;
+      });
+      catItems.forEach(function (o) {
+        var b = o.b, d = o.d;
         var statusChip = budgetStatusChip(d);
         items.appendChild(h('div', {
           class: 'card budget-card tappable',
@@ -1613,8 +1625,8 @@
     var b = D.budgets.filter(function (x) { return x.id === id; })[0];
     if (!b) return;
     var y = D.viewYear;
-    // 关键：直接操作真实的 b.schedule（budgetSchedule 返回的是副本，改副本不会持久化）
-    if (!Array.isArray(b.schedule)) b.schedule = C.budgetSchedule(b);
+    // 关键：始终用 budgetSchedule 规整后的真实数组（含每期 amount/paidAmount），改它即持久化
+    b.schedule = C.budgetSchedule(b);
 
     function render() {
       var d = C.budgetYearData(b, y);
@@ -1628,21 +1640,32 @@
         if (!sched.length) { payBox.appendChild(h('div', { class: 'empty-sm' }, '暂无付款计划')); return; }
         sched.forEach(function (p) {
           var inY = p.expected.substring(0, 4) === String(y);
+          var defDate = p.expected + '-01';                 // 实付日期默认与预计年月一致（该月 1 号）
           var chk = h('input', { type: 'checkbox' }); chk.checked = !!p.paid;
-          var dt = input({ type: 'date', value: p.paidDate || P.todayYmd() });
+          var dt = input({ type: 'date', value: p.paidDate || defDate });
+          var payAmt = input({ type: 'number', step: '0.01', value: (p.paidAmount != null && p.paidAmount !== '' ? p.paidAmount : (Number(p.amount) || 0)) });
           chk.onchange = function () {
             p.paid = chk.checked;
-            if (p.paid) { if (!p.paidDate) p.paidDate = dt.value || P.todayYmd(); } else { p.paidDate = ''; p.paidBy = null; }
-            save(); render();                         // 刷新本弹窗（含“已付”统计/状态）
-            if (typeof renderBudget === 'function') renderBudget(); // 同步底层预算首页
+            if (p.paid) {
+              if (!p.paidDate) p.paidDate = dt.value || defDate;
+              // 实付金额默认取本期计划金额（未自填时）
+              if (p.paidAmount == null || p.paidAmount === '' || Number(p.paidAmount) === 0) p.paidAmount = Number(payAmt.value) || (Number(p.amount) || 0);
+            } else { p.paidDate = ''; p.paidBy = null; p.paidAmount = null; }
+            save(); render();
+            if (typeof renderBudget === 'function') renderBudget();
           };
           dt.onchange = function () { p.paidDate = dt.value; save(); renderPeriods(); if (typeof renderBudget === 'function') renderBudget(); };
+          payAmt.onchange = function () { p.paidAmount = Number(payAmt.value) || 0; if (p.paid) { save(); render(); if (typeof renderBudget === 'function') renderBudget(); } };
           payBox.appendChild(h('div', { class: 'list-item' + (inY ? '' : ' muted'), style: { alignItems: 'center' } }, [
             h('div', { class: 'li-main' }, [
               h('div', { class: 'li-title' }, [p.expected + ' 预计', inY ? null : h('span', { class: 'chip gray', style: { marginLeft: 6 } }, '其他年')]),
-              h('div', { class: 'li-sub' }, '本期金额 ' + money(per) + (p.paid ? (' · 已付 ' + (p.paidDate || '')) : ' · 待付'))
+              h('div', { class: 'li-sub' }, '本期计划 ' + money(Number(p.amount) || 0) + (p.paid ? (' · 已付 ' + (p.paidDate || '')) : ' · 待付'))
             ]),
-            h('div', { class: 'li-right', style: { display: 'flex', alignItems: 'center', gap: 6 } }, [chk, dt])
+            h('div', { class: 'li-right', style: { display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' } }, [
+              h('div', { class: 'field', style: { minWidth: 56 } }, [h('label', {}, '已付'), chk]),
+              field('实付日期', dt),
+              field('实付金额', payAmt)
+            ])
           ]));
         });
       }
@@ -1659,7 +1682,7 @@
         h('div', { class: 'budget-detail-period' }, '支付方式 ' + payMethodLabel(d.payMethod) + (b.categoryId ? ' · ' + catName(b.categoryId) : '')),
         h('div', { class: 'budget-detail-stats' }, [
           bdStat('预算总额（录入）', d.fullTotal),
-          bdStat('每期金额', per),
+          bdStat('每期均摊', per),
           bdStat('本年预计', d.total),
           bdStat('本年已付', d.paidCash),
           bdStat('本年待付', d.remainToPay, d.remainToPay > 0),
@@ -1687,12 +1710,12 @@
       [{ value: '', label: '未分类' }].concat((D.budgetCategories || []).map(function (c) { return { value: c.id, label: c.name }; })));
     var note = input({ value: b ? b.note : '', placeholder: '可选' });
 
-    // 付款计划（工作副本）
+    // 付款计划（工作副本，含每期金额/实付金额）
     var method = b && b.payMethod ? b.payMethod : 'once';
     var periods = (b && Array.isArray(b.schedule) && b.schedule.length)
-      ? b.schedule.map(function (p) { return { expected: p.expected, paid: !!p.paid, paidDate: p.paidDate || '', paidBy: p.paidBy || null }; })
+      ? b.schedule.map(function (p) { return { expected: p.expected, paid: !!p.paid, paidDate: p.paidDate || '', paidBy: p.paidBy || null, amount: (p.amount != null ? Number(p.amount) : null), paidAmount: (p.paidAmount != null ? Number(p.paidAmount) : null) }; })
       : (b && b.expectedDate
-          ? [{ expected: b.expectedDate.substring(0, 7), paid: !!b.paid, paidDate: b.paidDate || '', paidBy: b.paidBy || null }]
+          ? [{ expected: b.expectedDate.substring(0, 7), paid: !!b.paid, paidDate: b.paidDate || '', paidBy: b.paidBy || null, amount: null, paidAmount: null }]
           : []);
 
     var methodSel = select({ value: method }, [
@@ -1711,10 +1734,14 @@
     var scheduleWrap = h('div', {});
     var paidCountHint = h('div', { class: 'li-sub', style: { margin: '6px 0' } }, '');
 
+    // 每期“计划金额”的有效值：用户自填(p.amount 非 null)优先，否则按 本年预算金额÷期数 自动计算
+    function perDefault() { return periods.length ? (Number(total.value) || 0) / periods.length : 0; }
+    function effAmount(p) { return (p.amount != null && p.amount !== '') ? Number(p.amount) : perDefault(); }
     function syncPaidCount() {
       var n = periods.filter(function (p) { return p.paid; }).length;
-      var per = periods.length ? (Number(total.value) || 0) / periods.length : 0;
-      paidCountHint.textContent = periods.length ? ('共 ' + periods.length + ' 期 · 已付 ' + n + ' 期 · 每期 ' + money(per)) : '请先设置付款时间';
+      var per = perDefault();
+      var sumAmt = periods.reduce(function (s, p) { return s + effAmount(p); }, 0);
+      paidCountHint.textContent = periods.length ? ('共 ' + periods.length + ' 期 · 已付 ' + n + ' 期 · 每期默认 ' + money(per) + ' · 各期金额合计 ' + money(sumAmt)) : '请先设置付款时间';
     }
     function rebuildList() {
       var list = [];
@@ -1727,40 +1754,66 @@
         var cur = sy * 12 + (sm - 1), end = ey * 12 + (em - 1);
         for (var k = cur; k <= end; k++) { var yy = Math.floor(k / 12), mm = (k % 12) + 1; list.push(yy + '-' + P.pad2(mm)); }
       }
-      // irregular 不自动生成（手动分期）
+      // irregular 不自动生成（手动分期）；新期金额留 null = 自动按 本年预算金额÷期数
       var keep = {}; periods.forEach(function (p) { keep[p.expected] = p; });
-      periods = list.map(function (ym) { return keep[ym] || { expected: ym, paid: false, paidDate: '', paidBy: null }; });
+      periods = list.map(function (ym) { return keep[ym] || { expected: ym, paid: false, paidDate: '', paidBy: null, amount: null, paidAmount: null }; });
     }
     function buildPeriodRow(p) {
       var leftKids = [];
       if (methodSel.value === 'irregular') {
         var ys = ymSelect(Number(p.expected.substring(0, 4)), Number(p.expected.substring(5, 7)));
         // 注意：ymSelect 返回的是 {ys, ms, get} 对象，onchange 必须绑在真实的 <select> 节点上
-        var onYm = function () { p.expected = ys.get(); syncPaidCount(); };
+        var onYm = function () { p.expected = ys.get(); if (!p.paidDate) p.paidDate = p.expected + '-01'; syncPaidCount(); renderSchedule(); };
         ys.ys.onchange = onYm; ys.ms.onchange = onYm;
         leftKids.push(ymField('预计年月', ys));
       } else {
         leftKids.push(h('div', { class: 'field' }, [h('label', {}, '预计'), h('div', { class: 'li-sub', style: { paddingTop: 6 } }, p.expected)]));
       }
-      var chk = h('input', { type: 'checkbox' }); chk.checked = !!p.paid;
-      var dt = input({ type: 'date', value: p.paidDate || P.todayYmd() });
-      // 实付日期始终可点选（勾选已付时自动填当天，取消勾选则清空），避免 disabled 时序问题导致点不进去
-      chk.onchange = function () { p.paid = chk.checked; if (p.paid) { if (!p.paidDate) p.paidDate = dt.value || P.todayYmd(); } else { p.paidDate = ''; p.paidBy = null; } syncPaidCount(); };
+      // 本期计划金额（默认 = 本年预算金额 ÷ 期数，可改；清空或等同默认即恢复自动计算）
+      var planned = effAmount(p);
+      var amt = input({ type: 'number', step: '0.01', value: planned });
+      amt.onchange = function () {
+        var v = Number(amt.value);
+        // 与自动默认一致则保持“自动”(null)，否则记为用户自定义
+        p.amount = (Math.abs(v - perDefault()) < 0.005) ? null : v;
+        syncPaidCount();
+      };
+      var defDate = p.expected + '-01';                 // 实付日期默认与预计年月一致（该月 1 号）
+      var dt = input({ type: 'date', value: p.paidDate || defDate });
       dt.onchange = function () { p.paidDate = dt.value; };
-      var kids = leftKids.concat([field('已付', chk), field('实付日期', dt)]);
+      // 实付金额（默认 = 本期计划金额，可改；勾选已付时若未填则自动取计划金额）
+      var payAmt = input({ type: 'number', step: '0.01', value: (p.paidAmount != null && p.paidAmount !== '' ? p.paidAmount : planned) });
+      payAmt.onchange = function () { p.paidAmount = Number(payAmt.value) || 0; syncPaidCount(); };
+      var chk = h('input', { type: 'checkbox' }); chk.checked = !!p.paid;
+      // 实付日期始终可点选（勾选已付时默认填预计日期，可改），避免 disabled 时序问题导致点不进去
+      chk.onchange = function () {
+        p.paid = chk.checked;
+        if (p.paid) {
+          if (!p.paidDate) p.paidDate = dt.value || defDate;
+          if (p.paidAmount == null || p.paidAmount === '' || Number(p.paidAmount) === 0) p.paidAmount = Number(payAmt.value) || planned;
+        } else { p.paidDate = ''; p.paidBy = null; p.paidAmount = null; }
+        syncPaidCount();
+      };
+      var kids = leftKids.concat([
+        field('本期金额(元)', amt),
+        h('div', { class: 'field', style: { minWidth: 56 } }, [h('label', {}, '已付'), chk]),
+        field('实付日期', dt),
+        field('实付金额', payAmt)
+      ]);
       if (methodSel.value === 'irregular') {
         var rm = h('button', { class: 'btn btn-sm btn-danger', type: 'button' }, '✕');
         rm.onclick = function () { periods = periods.filter(function (x) { return x !== p; }); renderSchedule(); syncPaidCount(); };
         kids.push(rm);
       }
-      return h('div', { class: 'row2', style: { alignItems: 'end', marginBottom: 6 } }, kids);
+      // 保留 row2 类（冒烟测试按 .row2 定位期行），内部用 flex 换行容纳多字段
+      return h('div', { class: 'budget-period row2', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 10, marginBottom: 8, padding: 8, background: '#fafafa', border: '1px solid #eee', borderRadius: 8 } }, kids);
     }
     function renderSchedule() {
       scheduleWrap.innerHTML = '';
       if (!periods.length) { scheduleWrap.appendChild(h('div', { class: 'empty-sm' }, '请先设置付款时间')); return; }
       periods.forEach(function (p) { scheduleWrap.appendChild(buildPeriodRow(p)); });
     }
-    function addIrr() { periods.push({ expected: D.viewYear + '-' + P.pad2(new Date().getMonth() + 1), paid: false, paidDate: '', paidBy: null }); renderSchedule(); syncPaidCount(); }
+    function addIrr() { periods.push({ expected: D.viewYear + '-' + P.pad2(new Date().getMonth() + 1), paid: false, paidDate: '', paidBy: null, amount: null, paidAmount: null }); renderSchedule(); syncPaidCount(); }
     // ymSelect 返回 {ys,ms,get}，需包进一个容器再交给 field
     function ymField(label, ym) {
       return field(label, h('div', { class: 'row2', style: { alignItems: 'end' } }, [ym.ys, ym.ms]));
@@ -1788,7 +1841,7 @@
     onceSel.ys.onchange = onTimeChange; onceSel.ms.onchange = onTimeChange;
     fromSel.ys.onchange = onTimeChange; fromSel.ms.onchange = onTimeChange;
     toSel.ys.onchange = onTimeChange; toSel.ms.onchange = onTimeChange;
-    total.onchange = syncPaidCount;
+    total.onchange = function () { renderSchedule(); syncPaidCount(); };
     syncTime();
     firstSync = false;
 
@@ -1812,7 +1865,7 @@
         var obj = {
           name: name.value.trim(), categoryId: catSel.value || null, total: t,
           payMethod: methodSel.value,
-          schedule: periods.map(function (p) { return { expected: p.expected, paid: !!p.paid, paidDate: p.paidDate || '', paidBy: p.paidBy || null }; }),
+          schedule: periods.map(function (p) { var a = effAmount(p); return { expected: p.expected, paid: !!p.paid, paidDate: p.paidDate || '', paidBy: p.paidBy || null, amount: (a != null ? Number(a) : null), paidAmount: (p.paidAmount != null && p.paidAmount !== '' ? Number(p.paidAmount) : null) }; }),
           note: note.value.trim()
         };
         var minY = periods.reduce(function (a, p) { return Math.min(a, Number(p.expected.substring(0, 4))); }, Infinity);
@@ -1845,7 +1898,7 @@
         var newSched = srcSched.map(function (p) {
           var y = Number(p.expected.substring(0, 4)) + delta;
           var m = p.expected.substring(5, 7);
-          return { expected: y + '-' + m, paid: false, paidDate: '', paidBy: null };
+          return { expected: y + '-' + m, paid: false, paidDate: '', paidBy: null, amount: (p.amount != null ? p.amount : null), paidAmount: null };
         });
         var clone = {
           id: P.uid('b'),
