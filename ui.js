@@ -1493,11 +1493,9 @@
     });
     return h('div', { class: 'ins-forecast' }, [
       h('div', { class: 'section-label' }, ['📅 ' + year + ' 年每月预计预算支出']),
-      h('div', { class: 'ins-fc-summary' }, [
-        h('span', { class: 'chip' }, '全年合计 ' + money(fc.total)),
-        h('span', { class: 'chip' }, '月均 ' + money(fc.monthlyAvg)),
-        fc.peakMonth ? h('span', { class: 'chip red' }, '峰值 ' + fc.peakMonth + '月 ' + money(fc.peak)) : null
-      ]),
+      fc.peakMonth ? h('div', { class: 'ins-fc-summary' }, [
+        h('span', { class: 'chip red' }, '峰值 ' + fc.peakMonth + '月 ' + money(fc.peak))
+      ]) : null,
       h('div', { class: 'ins-fc-bars' }, bars),
       h('div', { class: 'ins-fc-hint' }, '按各预算的支付方式（一次性付/按月付/不定期付）与预计年月推算每月要预留的金额；某月所有期都已付会标记绿色。点某月看明细。')
     ]);
@@ -1533,9 +1531,9 @@
         h('div', { class: 'bov-remain' }, '全部预算总额 ' + money(ov.sumTotal))
       ]),
       h('div', { class: 'bov-tiles' }, [
-        bovTile('本年实际已付现金', money(ov.paidCashTotal), 'cash'),
-        bovTile('当前月均预算支出', money(ov.monthlyAvgTotal), 'avg'),
-        bovTile('本年剩余待付款', money(ov.remainTotal), 'cost')
+        bovTile('本年实际已付', money(ov.paidCashTotal), 'cash'),
+        bovTile('当前月均', money(ov.monthlyAvgTotal), 'avg'),
+        bovTile('本年剩余', money(ov.remainTotal), 'cost')
       ]),
       h('div', { class: 'bov-feet bov-feet-2' }, [
         h('span', {}, ['本年预算总额 ', h('span', { class: 'big' }, money(ov.sumTotal))]),
