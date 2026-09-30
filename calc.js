@@ -72,10 +72,14 @@
       - investExpenseForMonth(data, rec.year, rec.month)
       - advanceUnreimbursed(rec);
   }
-  // 本月消费 = 大额 + 还款 + 投资支出 + 其他日常
+  // 本月消费 = 大额 + 还款 + 投资支出 + 其他日常（小额）
+  // 次月期初未填时小额无法倒算，此时改为「已记录支出」合计 = 大额 + 还款 + 投资 + 未报销垫付(流动资金渠道)
   function monthConsumption(rec, data) {
+    data = data || (typeof D !== 'undefined' ? D.getData() : null);
+    var lg = largeExpenseTotal(rec), rp = repaymentTotal(rec), inv = investExpenseForMonth(data, rec.year, rec.month);
     var other = otherDaily(rec, data);
-    return other == null ? null : largeExpenseTotal(rec) + repaymentTotal(rec) + investExpenseForMonth(data, rec.year, rec.month) + other;
+    if (other == null) return lg + rp + inv + advanceUnreimbursed(rec);
+    return lg + rp + inv + other;
   }
 
   /* ---------- 流动资金：当前可用总额（最新已知余额） ---------- */

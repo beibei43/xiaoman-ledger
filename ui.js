@@ -559,9 +559,11 @@
     // ③ 本月收入 / 本月支出（合计，各带 +）
     var incVal = rec ? C.monthIncome(rec) : 0;
     var expVal = rec ? C.monthConsumption(rec, D) : 0;
+    // 次月期初未填时，小额未记账无法倒算，本月支出 = 已记录支出（大额+还款+投资+未报销垫付）
+    var otherPending = rec ? (C.otherDaily(rec, D) == null) : false;
     sec.appendChild(h('div', { class: 'flow-summary' }, [
       sumLine('🟢 本月收入', money(incVal), 'add-income'),
-      sumLine('🔴 本月支出', money(expVal), 'add-consumption')
+      sumLine(otherPending ? '🔴 本月支出（未含小额）' : '🔴 本月支出', money(expVal), 'add-consumption')
     ]));
 
     if (!rec) {
@@ -881,7 +883,7 @@
   function clearBudgetPaidIf(b, srcId) {
     if (!b || !b.schedule) return;
     b.schedule.forEach(function (p) {
-      if (p.paidBy === srcId) { p.paid = false; p.paidDate = ''; p.paidBy = null; }
+      if (p.paidBy === srcId) { p.paid = false; p.paidDate = ''; p.paidAmount = null; p.paidBy = null; }
     });
   }
   function delInvest(id) {
@@ -1171,7 +1173,7 @@
             var tgt = lb.schedule.filter(function (p) { return p.expected === expYm; })[0]
                    || lb.schedule.filter(function (p) { return !p.paid; })[0];
             if (!tgt && lb.schedule.length) tgt = lb.schedule[0];
-            if (tgt) { tgt.paid = true; tgt.paidDate = obj.date; tgt.paidBy = obj.id; }
+            if (tgt) { tgt.paid = true; tgt.paidDate = obj.date; tgt.paidAmount = obj.amount; tgt.paidBy = obj.id; }
           }
         }
         applyDepositDeduction(obj);
@@ -1180,7 +1182,7 @@
           var bname = linkedBudget.name;
           toast('已记录'); closeModal(); showPage('flow');
           // 明确提示：这笔钱已自动归入预算的付款计划
-          confirmDialog('已关联预算', '这笔 ¥' + money(obj.amount) + '（' + obj.date + '）已自动标记「' + bname + '」的 ' + (obj.date || '').substring(0, 7) + ' 期为已付，实付日期 ' + obj.date + '。点“查看”可去核对。', function () { showPage('budget'); budgetDetail(linkedBudget.id); });
+          confirmDialog('已关联预算', '这笔 ¥' + money(obj.amount) + '（' + obj.date + '）已自动标记「' + bname + '」的 ' + (obj.date || '').substring(0, 7) + ' 期为已付，实付日期 ' + obj.date + '、实付金额 ¥' + money(obj.amount) + '（可在预算详情中修改）。点“查看”可去核对。', function () { showPage('budget'); budgetDetail(linkedBudget.id); });
         } else {
           toast(existing ? '已更新' : '已记录'); closeModal(); showPage('flow');
         }
@@ -2889,7 +2891,7 @@
             var itgt = ib.schedule.filter(function (p) { return p.expected === expYm; })[0]
                     || ib.schedule.filter(function (p) { return !p.paid; })[0];
             if (!itgt && ib.schedule.length) itgt = ib.schedule[0];
-            if (itgt) { itgt.paid = true; itgt.paidDate = rec.date; itgt.paidBy = 'ins_' + rec.id; }
+            if (itgt) { itgt.paid = true; itgt.paidDate = rec.date; itgt.paidAmount = rec.amount; itgt.paidBy = 'ins_' + rec.id; }
           }
         }
         // 更新提醒（月/日）：改了则重置“本年已完成”状态，下个提醒日再弹
